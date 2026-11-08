@@ -17,10 +17,31 @@ pub(crate) struct CustomTranslator {
     key: Option<Secret>,
     client: reqwest::blocking::Client,
     history: History,
-    /// Sent as `reasoning_effort`. Set to `None` for good when the server refuses it.
+    /// Sent as `reasoning_effort` unless the server refused it.
     effort: Option<ReasoningEffort>,
+    /// Optional parameters that the server refused. Left out of each request
+    /// for the life of this translator.
+    refused: Vec<Param>,
     /// The "not supported" message that waits for `take_notice`. Set once.
     notice: Option<String>,
+}
+
+/// An optional request parameter that a server can refuse with HTTP 400.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Param {
+    /// `temperature`: OpenAI reasoning models accept only the default (1).
+    Temperature,
+    ReasoningEffort,
+}
+
+impl Param {
+    /// The word that a server error names for this parameter.
+    fn word(self) -> &'static str {
+        match self {
+            Param::Temperature => "temperature",
+            Param::ReasoningEffort => "reasoning",
+        }
+    }
 }
 
 /// Shown once when a server refuses `reasoning_effort`.
@@ -48,6 +69,7 @@ impl CustomTranslator {
             client,
             history: History::default(),
             effort,
+            refused: Vec::new(),
             notice: None,
         })
     }
@@ -55,17 +77,33 @@ impl CustomTranslator {
     fn request_body(&self, text: &str, source: Option<&str>, target: &str) -> Value {
         let mut body = json!({
             "model": self.endpoint.model,
-            "temperature": 0.2,
             "stream": false,
             "messages": [
                 {"role": "system", "content": system_prompt(source, target, &self.history)},
                 {"role": "user", "content": text},
             ],
         });
-        if let Some(effort) = self.effort {
-            body["reasoning_effort"] = json!(effort.as_str());
+        for param in self.sent_params() {
+            match param {
+                Param::Temperature => body["temperature"] = json!(0.2),
+                Param::ReasoningEffort => {
+                    if let Some(effort) = self.effort {
+                        body["reasoning_effort"] = json!(effort.as_str());
+                    }
+                }
+            }
         }
         body
+    }
+
+    /// The optional parameters that the next request sends.
+    fn sent_params(&self) -> Vec<Param> {
+        let mut params = vec![Param::Temperature];
+        if self.effort.is_some() {
+            params.push(Param::ReasoningEffort);
+        }
+        params.retain(|p| !self.refused.contains(p));
+        params
     }
 
     /// Sends one request. Returns the HTTP status and the body text.
@@ -115,9 +153,21 @@ fn error_text(body: &str) -> String {
     text.to_string()
 }
 
-/// True when a server error text names the reasoning field.
-fn names_reasoning(body: &str) -> bool {
-    error_text(body).to_ascii_lowercase().contains("reasoning")
+/// The first parameter of `sent` that a 400 body names, in `error.param`
+/// or in the error text.
+fn refused_param(body: &str, sent: &[Param]) -> Option<Param> {
+    let param = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.pointer("/error/param")?
+                .as_str()
+                .map(str::to_ascii_lowercase)
+        })
+        .unwrap_or_default();
+    let text = error_text(body).to_ascii_lowercase();
+    sent.iter()
+        .copied()
+        .find(|p| param.contains(p.word()) || text.contains(p.word()))
 }
 
 /// Cuts user-facing server text. Call it after `redact`: a key cut in half
@@ -144,27 +194,37 @@ impl Translator for CustomTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
-        let body = self.request_body(text, source_language, target_language);
-        let (mut status, mut response_text) = self.post(&body)?;
-        // A 400 whose text names the reasoning field: the server does not know
-        // `reasoning_effort`. Retry once without it. Any other 400 (bad model,
-        // bad request) is not caused by the field and is reported as it is.
-        if self.effort.is_some() && status == 400 && names_reasoning(&response_text) {
-            let effort = self.effort.take();
-            let retry = self.request_body(text, source_language, target_language);
-            match self.post(&retry) {
-                Ok(reply) => (status, response_text) = reply,
+        // A 400 that names an optional parameter (temperature, reasoning_effort):
+        // the server does not accept it. Retry once without it, at most once per
+        // parameter. Any other 400 (bad model, bad request) is reported as it is.
+        let mut dropped = Vec::new();
+        let (status, response_text) = loop {
+            let body = self.request_body(text, source_language, target_language);
+            let reply = match self.post(&body) {
+                Ok(reply) => reply,
                 Err(e) => {
-                    self.effort = effort;
+                    self.refused.retain(|p| !dropped.contains(p));
                     return Err(e);
                 }
+            };
+            let refused = (reply.0 == 400)
+                .then(|| refused_param(&reply.1, &self.sent_params()))
+                .flatten();
+            match refused {
+                Some(param) => {
+                    dropped.push(param);
+                    self.refused.push(param);
+                }
+                None => break reply,
             }
-            if (200..300).contains(&status) {
-                // The field was the cause: leave it out for the rest of the session.
+        };
+        if (200..300).contains(&status) {
+            // The parameters were the cause: they stay out for the rest of the session.
+            if dropped.contains(&Param::ReasoningEffort) {
                 self.notice = Some(EFFORT_UNSUPPORTED.to_string());
-            } else {
-                self.effort = effort;
             }
+        } else {
+            self.refused.retain(|p| !dropped.contains(p));
         }
         let success = (200..300).contains(&status);
         if !success {
@@ -514,5 +574,84 @@ mod tests {
         assert!(err.contains("500") && err.contains("boom"), "{err}");
         assert_eq!(t.take_notice(), None);
         assert_eq!(t.effort, Some(ReasoningEffort::Medium));
+        assert!(t.refused.is_empty());
+    }
+
+    #[test]
+    fn a_400_about_temperature_retries_once_without_it_and_remembers() {
+        let refusal = json!({"error": {
+            "message": "Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported.",
+            "type": "invalid_request_error",
+            "param": "temperature",
+            "code": "unsupported_value"
+        }})
+        .to_string();
+        let (base_url, server) = mock_server_seq(vec![
+            ("400 Bad Request", refusal),
+            ("200 OK", ok_body("하나")),
+            ("200 OK", ok_body("둘")),
+        ]);
+        let mut t = translator_with(base_url, None, Some(ReasoningEffort::Low));
+        assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
+        // Temperature is not a user setting: no notice.
+        assert_eq!(t.take_notice(), None);
+        assert_eq!(t.translate("two", Some("en"), "ko").unwrap(), "둘");
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(request_json(&requests[0])["temperature"], 0.2);
+        for raw in &requests[1..] {
+            let body = request_json(raw);
+            assert!(body.get("temperature").is_none(), "{body}");
+            assert_eq!(body["reasoning_effort"], "low", "{body}");
+        }
+    }
+
+    #[test]
+    fn a_server_that_refuses_both_parameters_gets_neither() {
+        let temperature = json!({"error": {"message": "Unsupported parameter: 'temperature'", "code": "unsupported_parameter"}})
+            .to_string();
+        let reasoning = json!({"error": {"message": "Unrecognized request argument supplied: reasoning_effort"}})
+            .to_string();
+        let (base_url, server) = mock_server_seq(vec![
+            ("400 Bad Request", temperature),
+            ("400 Bad Request", reasoning),
+            ("200 OK", ok_body("하나")),
+            ("200 OK", ok_body("둘")),
+        ]);
+        let mut t = translator_with(base_url, None, Some(ReasoningEffort::High));
+        assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
+        assert_eq!(t.take_notice().as_deref(), Some(EFFORT_UNSUPPORTED));
+        assert_eq!(t.translate("two", Some("en"), "ko").unwrap(), "둘");
+        assert_eq!(t.take_notice(), None);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 4);
+        let first = request_json(&requests[0]);
+        assert!(first.get("temperature").is_some() && first.get("reasoning_effort").is_some());
+        let second = request_json(&requests[1]);
+        assert!(second.get("temperature").is_none() && second.get("reasoning_effort").is_some());
+        for raw in &requests[2..] {
+            let body = request_json(raw);
+            assert!(
+                body.get("temperature").is_none() && body.get("reasoning_effort").is_none(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_second_400_about_the_same_parameter_is_reported() {
+        let refusal = json!({"error": {"message": "temperature is not supported"}}).to_string();
+        let (base_url, server) = mock_server_seq(vec![
+            ("400 Bad Request", refusal.clone()),
+            ("400 Bad Request", refusal),
+        ]);
+        let mut t = translator(base_url, None);
+        let err = t
+            .translate("one", Some("en"), "ko")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("400"), "{err}");
+        assert_eq!(server.join().unwrap().len(), 2);
+        assert!(t.refused.is_empty());
     }
 }
