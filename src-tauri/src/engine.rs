@@ -21,6 +21,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
+mod partial;
+
 /// Sends engine output to the UI. A trait so tests can run without Tauri.
 pub trait Sink: Send + Sync + 'static {
     fn utterance(&self, u: &Utterance);
@@ -28,12 +30,7 @@ pub trait Sink: Send + Sync + 'static {
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str);
     /// The session cannot go on (a GPU failure): stop and save it, then tell the user.
     fn fault(&self, message: &str);
-    /// Streaming ASR only (follow-up live mode). Kept as the ready interface
-    /// (human decision 2026-11-08); nothing calls it yet.
-    #[allow(dead_code)]
-    fn partial(&self, p: &PartialText) {
-        let _ = p;
-    }
+    fn partial(&self, p: &PartialText);
 }
 
 #[derive(Serialize, Clone)]
@@ -154,6 +151,7 @@ pub fn translate_placement(settings: &Settings, models_dir: &Path) -> anyhow::Re
 }
 
 /// Loads the models, creates the session file and starts the stage threads.
+/// `partials`: run a second ASR for live partial text (`partial::enabled`).
 fn start_pipeline(
     settings: &Settings,
     title: Option<String>,
@@ -161,12 +159,17 @@ fn start_pipeline(
     bundled_dir: &Path,
     store: &SessionStore,
     sink: &Arc<dyn Sink>,
+    partials: bool,
 ) -> anyhow::Result<Pipeline> {
-    let asr = speech::build_asr(
-        &settings.asr,
-        settings.meeting_language.as_deref(),
-        models_dir,
-    )?;
+    let build_asr = || {
+        speech::build_asr(
+            &settings.asr,
+            settings.meeting_language.as_deref(),
+            models_dir,
+        )
+    };
+    let asr = build_asr()?;
+    let partial_asr = if partials { Some(build_asr()?) } else { None };
     let placement = translate_placement(settings, models_dir)?;
     let translator = translate::build_translator(&settings.translate, models_dir, &placement)?;
     let translate_device =
@@ -203,10 +206,24 @@ fn start_pipeline(
     let (tr_tx, tr_rx) = backlog(BACKLOG_LIMIT_MS, utterance_ms);
 
     let mut threads = Vec::new();
+    let (feed, partial_translations) = match partial_asr {
+        Some(asr) => {
+            let (feed, translations, thread) = partial::start(
+                asr,
+                &settings.translate,
+                translate_device.as_ref().is_some_and(|d| d.gpu),
+                target_language.clone(),
+                Arc::clone(sink),
+            );
+            threads.push(thread);
+            (Some(feed), translations)
+        }
+        None => (None, None),
+    };
     {
         let sink = Arc::clone(sink);
         threads.push(std::thread::spawn(move || {
-            vad_loop(audio_rx, vads, seg_tx, sink)
+            vad_loop(audio_rx, vads, seg_tx, sink, feed)
         }));
     }
     {
@@ -222,7 +239,14 @@ fn start_pipeline(
         let writer = writer.clone();
         let target = target_language.clone();
         threads.push(std::thread::spawn(move || {
-            translate_loop(tr_rx, translator, writer, target, sink)
+            translate_loop(
+                tr_rx,
+                translator,
+                writer,
+                target,
+                sink,
+                partial_translations,
+            )
         }));
     }
 
@@ -266,7 +290,15 @@ pub fn start(
         threads,
         writer,
         translate_device,
-    } = start_pipeline(settings, title, models_dir, bundled_dir, store, &sink)?;
+    } = start_pipeline(
+        settings,
+        title,
+        models_dir,
+        bundled_dir,
+        store,
+        &sink,
+        partial::enabled(&settings.asr),
+    )?;
 
     let t0 = Instant::now();
     let mut captures = Vec::new();
@@ -398,9 +430,13 @@ impl<T> Backlog<T> {
 
 impl<T> BacklogRx<T> {
     fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        self.rx
-            .iter()
-            .inspect(|item| take_ms(&self.queued_ms, (self.ms)(item)))
+        self.rx.iter().map(|item| self.took(item))
+    }
+
+    /// Counts an item that left `rx` out of the queue.
+    fn took(&self, item: T) -> T {
+        take_ms(&self.queued_ms, (self.ms)(&item));
+        item
     }
 }
 
@@ -451,6 +487,7 @@ fn vad_loop(
     mut vads: Vec<(SourceKind, Vad)>,
     tx: Backlog<SpeechSegment>,
     sink: Arc<dyn Sink>,
+    mut feed: Option<partial::Feed>,
 ) {
     let mut warning = DropWarning::new(
         "notice",
@@ -461,6 +498,7 @@ fn vad_loop(
             "ASR backlog full: dropped {} ms of speech",
             segment_ms(&seg)
         );
+        partial::clear(sink.as_ref(), &seg);
         warning.dropped(seg.source, sink.as_ref());
     };
     let mut last_level = [Instant::now(), Instant::now()];
@@ -472,12 +510,21 @@ fn vad_loop(
         }
         if let Some((_, vad)) = vads.iter_mut().find(|(s, _)| *s == chunk.source) {
             for seg in vad.push(&chunk) {
+                if let Some(f) = feed.as_mut() {
+                    f.ended(seg.source);
+                }
                 tx.push(seg, &mut on_drop);
+            }
+            if let Some(f) = feed.as_mut() {
+                f.offer(&chunk, || vad.open_speech());
             }
         }
     }
     for (_, vad) in vads.iter_mut() {
         for seg in vad.flush() {
+            if let Some(f) = feed.as_mut() {
+                f.ended(seg.source);
+            }
             tx.push(seg, &mut on_drop);
         }
     }
@@ -528,11 +575,13 @@ fn asr_loop(
             Ok(t) => t,
             Err(e) => {
                 sink.error("asr", Some(seg.source), &e.to_string());
+                partial::clear(sink.as_ref(), &seg);
                 continue;
             }
         };
         let text = transcript.text.trim();
         if text.is_empty() {
+            partial::clear(sink.as_ref(), &seg);
             continue;
         }
         let speaker = match diarizer.as_mut() {
@@ -573,10 +622,17 @@ fn translate_loop(
     writer: Arc<Mutex<Option<SessionWriter>>>,
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
+    mut partials: Option<partial::Translations>,
 ) {
     // After a GPU failure the model is not used again; the session stops.
     let mut gpu_failed = false;
-    for mut u in rx.iter() {
+    while let Some(mut u) = partial::next_final(
+        &rx,
+        translator.as_mut(),
+        &target,
+        partials.as_mut(),
+        sink.as_ref(),
+    ) {
         let target_now = target.read().expect("target lock").clone();
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage
@@ -598,6 +654,7 @@ fn translate_loop(
                 },
                 Err(e) if e.is::<GpuFailure>() => {
                     gpu_failed = true;
+                    partials = None;
                     sink.fault(&e.to_string());
                     TranslationState::Failed {
                         message: e.to_string(),
@@ -698,14 +755,24 @@ mod tests {
 
     /// Records engine output for tests.
     #[derive(Default)]
-    struct Recorder {
-        utterances: Mutex<Vec<Utterance>>,
-        errors: Mutex<Vec<String>>,
+    pub(super) struct Recorder {
+        pub(super) utterances: Mutex<Vec<Utterance>>,
+        /// The time of each event in `utterances`.
+        pub(super) utterance_times: Mutex<Vec<Instant>>,
+        pub(super) partials: Mutex<Vec<(Instant, PartialText)>>,
+        pub(super) errors: Mutex<Vec<String>>,
     }
 
     impl Sink for Recorder {
         fn utterance(&self, u: &Utterance) {
             self.utterances.lock().unwrap().push(u.clone());
+            self.utterance_times.lock().unwrap().push(Instant::now());
+        }
+        fn partial(&self, p: &PartialText) {
+            self.partials
+                .lock()
+                .unwrap()
+                .push((Instant::now(), p.clone()));
         }
         fn level(&self, _: SourceKind, _: f32) {}
         fn error(&self, stage: &str, _: Option<SourceKind>, message: &str) {
@@ -728,6 +795,15 @@ mod tests {
     }
 
     impl translate::Translator for BrokenGpu {
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            unreachable!("no partials in this test")
+        }
         fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
             if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
                 Ok(format!("번역 {text}"))
@@ -767,6 +843,7 @@ mod tests {
             Arc::new(Mutex::new(None)),
             Arc::new(RwLock::new("ko".into())),
             recorder.clone(),
+            None,
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
         assert_eq!(*recorder.errors.lock().unwrap(), ["fault: GPU 메모리 부족"]);
@@ -785,35 +862,27 @@ mod tests {
         assert_eq!(events[3].original, "hello 4");
     }
 
-    /// End to end without audio devices: speech clips go into the pipeline as
-    /// 100 ms chunks of two sources, then the saved session is read back.
-    /// Run: MORAGO_TEST_MODELS=<models folder; missing models are downloaded>
-    /// MORAGO_TEST_WAVS=<folder with en0.wav, sv_ko.wav, sv_ja.wav>
-    /// LLAMA_LIB_PROFILE=Release cargo test --lib engine -- --ignored --nocapture
-    /// CI runs it on Windows and macOS (job e2e, manual runs). On Linux it
-    /// aborts at the first onnxruntime call when llama.cpp is linked too
-    /// (std::regex clash, found 2026-11-08); Linux is not a target.
-    #[test]
-    #[ignore]
-    fn pipeline_end_to_end() {
-        use crate::settings::{AsrConfig, TranslateConfig};
-        let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
-        let ids = [models::SENSE_VOICE_ID, "gemma-4-e2b-it-q4"];
-        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
-        for id in ids {
-            if !models::is_installed(&models_dir, id) {
-                let cancel = std::sync::atomic::AtomicBool::new(false);
-                models::download(&models_dir, id, &|_| {}, &cancel).unwrap();
-            }
+    // Tests with real models. Run: MORAGO_TEST_MODELS=<models folder; missing
+    // models are downloaded> MORAGO_TEST_WAVS=<folder with en0.wav, sv_ko.wav,
+    // sv_ja.wav> LLAMA_LIB_PROFILE=Release cargo test --lib <test> -- --ignored --nocapture
+    // CI runs `pipeline_end_to_end` on Windows and macOS (job e2e, manual runs).
+    // On Linux they abort at the first onnxruntime call when llama.cpp is
+    // linked too (std::regex clash, found 2026-11-08); Linux is not a target.
+
+    fn models_dir() -> PathBuf {
+        PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap())
+    }
+
+    fn ensure_model(models_dir: &Path, id: &str) {
+        if !models::is_installed(models_dir, id) {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            models::download(models_dir, id, &|_| {}, &cancel).unwrap();
         }
-        let wavs = PathBuf::from(std::env::var("MORAGO_TEST_WAVS").unwrap());
-        let read = |name: &str| {
-            let path = wavs.join(format!("{name}.wav"));
-            sherpa_onnx::Wave::read(path.to_str().unwrap())
-                .unwrap()
-                .samples()
-                .to_vec()
-        };
+    }
+
+    /// SenseVoice Small and Gemma 4 E2B, installed.
+    fn e2e_settings(models_dir: &Path) -> Settings {
+        use crate::settings::{AsrConfig, TranslateConfig};
         let settings = Settings {
             asr: AsrConfig::Local {
                 model_id: models::SENSE_VOICE_ID.into(),
@@ -823,42 +892,68 @@ mod tests {
             },
             ..Settings::default()
         };
-        let root = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(root.path());
-        let recorder = Arc::new(Recorder::default());
-        let sink: Arc<dyn Sink> = recorder.clone();
-        let p = start_pipeline(
-            &settings,
-            Some("e2e".into()),
-            &models_dir,
-            &bundled,
-            &store,
-            &sink,
-        )
-        .unwrap();
+        for id in required_models(&settings) {
+            ensure_model(models_dir, &id);
+        }
+        settings
+    }
 
-        // System: English, then Japanese. Mic: Korean in the gap between them.
+    fn bundled_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models")
+    }
+
+    fn read_wav(name: &str) -> Vec<f32> {
+        let path =
+            PathBuf::from(std::env::var("MORAGO_TEST_WAVS").unwrap()).join(format!("{name}.wav"));
+        sherpa_onnx::Wave::read(path.to_str().unwrap())
+            .unwrap()
+            .samples()
+            .to_vec()
+    }
+
+    /// 100 ms chunks of two sources. System: English, then Japanese. Mic:
+    /// Korean in the gap between them.
+    fn e2e_chunks() -> Vec<AudioChunk> {
         let silence = vec![0.0f32; 16_000];
         let mut system = silence.clone();
-        system.extend(read("en0"));
+        system.extend(read_wav("en0"));
         system.extend(vec![0.0f32; 16_000 * 6]);
-        system.extend(read("sv_ja"));
+        system.extend(read_wav("sv_ja"));
         system.extend(&silence);
         let mut mic = vec![0.0f32; 16_000 * 9];
-        mic.extend(read("sv_ko"));
+        mic.extend(read_wav("sv_ko"));
         mic.extend(vec![0.0f32; system.len().saturating_sub(mic.len())]);
+        let mut chunks = Vec::new();
         for (i, (s, m)) in system.chunks(1600).zip(mic.chunks(1600)).enumerate() {
-            let start_ms = i as u64 * 100;
             for (source, samples) in [(SourceKind::System, s), (SourceKind::Mic, m)] {
-                p.audio_tx
-                    .send(AudioChunk {
-                        source,
-                        start_ms,
-                        samples: samples.to_vec(),
-                    })
-                    .unwrap();
+                chunks.push(AudioChunk {
+                    source,
+                    start_ms: i as u64 * 100,
+                    samples: samples.to_vec(),
+                });
             }
         }
+        chunks
+    }
+
+    /// Sends each chunk when its audio would be complete, as a capture does.
+    /// Returns the time of audio 0.
+    fn feed_in_real_time(p: &Pipeline, chunks: &[AudioChunk]) -> Instant {
+        let t0 = Instant::now();
+        for chunk in chunks {
+            let due = t0 + Duration::from_millis(chunk.start_ms + 100);
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            p.audio_tx.send(chunk.clone()).unwrap();
+        }
+        t0
+    }
+
+    /// Stops the pipeline and loads the saved session.
+    fn finish(
+        p: Pipeline,
+        root: &Path,
+        store: &SessionStore,
+    ) -> (SessionSummary, SessionMeta, Vec<Utterance>) {
         let running = Running {
             meta: p.meta.clone(),
             target_language: p.target_language,
@@ -867,10 +962,46 @@ mod tests {
             audio_tx: Some(p.audio_tx),
             threads: p.threads,
             writer: p.writer,
-            store_root: root.path().to_path_buf(),
+            store_root: root.to_path_buf(),
         };
         let summary = stop(running).unwrap();
         let (meta, utterances) = store.load(&p.meta.id).unwrap();
+        (summary, meta, utterances)
+    }
+
+    /// Prints the partial translation lag lines of `engine::partial`.
+    fn log_partials() {
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_module("morago_lib::engine::partial", log::LevelFilter::Info)
+            .try_init();
+    }
+
+    /// End to end without audio devices: speech clips go into the pipeline as
+    /// 100 ms chunks of two sources in real time, with partials, then the
+    /// saved session is read back.
+    #[test]
+    #[ignore]
+    fn pipeline_end_to_end() {
+        log_partials();
+        let models_dir = models_dir();
+        let settings = e2e_settings(&models_dir);
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn Sink> = recorder.clone();
+        let p = start_pipeline(
+            &settings,
+            Some("e2e".into()),
+            &models_dir,
+            &bundled_dir(),
+            &store,
+            &sink,
+            partial::enabled(&settings.asr),
+        )
+        .unwrap();
+        feed_in_real_time(&p, &e2e_chunks());
+        let (summary, meta, utterances) = finish(p, root.path(), &store);
         for u in &utterances {
             println!(
                 "{:>6}-{:>6} ms {:?} {} {:?}: {} => {:?}",
@@ -884,6 +1015,15 @@ mod tests {
                 .unwrap()
         );
         println!("errors: {:?}", recorder.errors.lock().unwrap());
+        let shown = recorder.partials.lock().unwrap();
+        println!(
+            "partials: {}, with translation: {}",
+            shown.len(),
+            shown
+                .iter()
+                .filter(|(_, p)| p.translation.is_some())
+                .count()
+        );
         assert!(recorder.errors.lock().unwrap().is_empty());
         assert!(summary.utterance_count >= 3, "{summary:?}");
         let lang = |l: &str| {
@@ -911,6 +1051,186 @@ mod tests {
         for u in &utterances {
             let last = events.iter().rev().find(|e| e.id == u.id).unwrap();
             assert_eq!(last, u);
+        }
+    }
+
+    /// CPU time of this process (user and kernel).
+    #[cfg(windows)]
+    fn cpu_time() -> Option<Duration> {
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn GetProcessTimes(
+                process: *mut std::ffi::c_void,
+                creation: *mut FileTime,
+                exit: *mut FileTime,
+                kernel: *mut FileTime,
+                user: *mut FileTime,
+            ) -> i32;
+        }
+        let mut t: [FileTime; 4] = Default::default();
+        let [c, e, k, u] = &mut t;
+        // SAFETY: four valid out pointers; the pseudo handle needs no close.
+        let ok = unsafe { GetProcessTimes(GetCurrentProcess(), c, e, k, u) };
+        let ns = |f: &FileTime| ((u64::from(f.high) << 32) | u64::from(f.low)) * 100;
+        (ok != 0).then(|| Duration::from_nanos(ns(&t[2]) + ns(&t[3])))
+    }
+
+    #[cfg(not(windows))]
+    fn cpu_time() -> Option<Duration> {
+        None
+    }
+
+    /// The clips of `pipeline_end_to_end`, with partials on and off, twice in
+    /// turn (a hot CPU runs slower). Prints per utterance:
+    /// first-partial delay from the speech start, partial intervals, final
+    /// latency (event time minus segment end, both in audio time) and the
+    /// process CPU time per wall time. The `engine::partial` log lines give the
+    /// partial translation lag.
+    #[test]
+    #[ignore]
+    fn pipeline_realtime() {
+        log_partials();
+        let models_dir = models_dir();
+        let settings = e2e_settings(&models_dir);
+        let chunks = e2e_chunks();
+        for partials in [true, false, true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let store = SessionStore::new(root.path());
+            let recorder = Arc::new(Recorder::default());
+            let sink: Arc<dyn Sink> = recorder.clone();
+            let p = start_pipeline(
+                &settings,
+                None,
+                &models_dir,
+                &bundled_dir(),
+                &store,
+                &sink,
+                partials,
+            )
+            .unwrap();
+            let cpu = cpu_time();
+            let t0 = feed_in_real_time(&p, &chunks);
+            let (_, _, utterances) = finish(p, root.path(), &store);
+            let wall = t0.elapsed();
+            let cpu = cpu.zip(cpu_time()).map(|(a, b)| b - a);
+            println!(
+                "=== partials {}: wall {wall:.1?}, CPU {cpu:.1?}, CPU/wall {}",
+                if partials { "on" } else { "off" },
+                cpu.map_or("n/a".into(), |c| format!(
+                    "{:.2}",
+                    c.as_secs_f64() / wall.as_secs_f64()
+                ))
+            );
+            // Audio time of an event: audio up to `ms` is in the pipeline at t0 + ms.
+            let ms = |t: &Instant| t.saturating_duration_since(t0).as_millis() as i64;
+            let events = recorder.utterances.lock().unwrap();
+            let times = recorder.utterance_times.lock().unwrap();
+            let shown = recorder.partials.lock().unwrap();
+            for u in &utterances {
+                let of_u = |e: &&(usize, &Utterance)| e.1.id == u.id;
+                let all: Vec<(usize, &Utterance)> = events.iter().enumerate().collect();
+                let first = all.iter().find(of_u).map(|(i, _)| ms(&times[*i])).unwrap();
+                let done = all
+                    .iter()
+                    .filter(of_u)
+                    .find(|(_, e)| matches!(e.translation, TranslationState::Done { .. }))
+                    .map(|(i, _)| ms(&times[*i]) - u.end_ms as i64);
+                let mine: Vec<(i64, &PartialText)> = shown
+                    .iter()
+                    .filter(|(_, p)| {
+                        p.source == u.source
+                            && !p.text.is_empty()
+                            && p.start_ms < u.end_ms
+                            && p.start_ms + 2_000 > u.start_ms
+                    })
+                    .map(|(t, p)| (ms(t), p))
+                    .collect();
+                let mut texts: Vec<i64> = Vec::new();
+                let mut translations: Vec<i64> = Vec::new();
+                let mut last: Option<&PartialText> = None;
+                for (t, p) in &mine {
+                    if last.is_none_or(|l| l.text != p.text) {
+                        texts.push(*t);
+                    }
+                    if p.translation.is_some()
+                        && last.is_none_or(|l| l.translation != p.translation)
+                    {
+                        translations.push(*t);
+                    }
+                    last = Some(p);
+                }
+                let gaps: Vec<i64> = texts.windows(2).map(|w| w[1] - w[0]).collect();
+                println!(
+                    "{:?} {:>5}-{:>5} ms {:?}: final +{} ms, translation {:?} ms; partials {} (first +{:?} ms from start), gaps {gaps:?} ms; partial translations {}",
+                    u.source,
+                    u.start_ms,
+                    u.end_ms,
+                    u.language,
+                    first - u.end_ms as i64,
+                    done,
+                    texts.len(),
+                    texts.first().map(|t| t - u.start_ms as i64),
+                    translations.len(),
+                );
+                if let Some((_, p)) = mine.last() {
+                    println!("  last partial: {} => {:?}", p.text, p.translation);
+                }
+                println!("  final: {} => {:?}", u.original, u.translation);
+                // No partial of a speech after its final.
+                assert!(mine.iter().all(|(t, _)| *t <= first), "{mine:?}");
+                if partials {
+                    assert!(!texts.is_empty(), "no partial for {}", u.original);
+                }
+            }
+            assert!(recorder.errors.lock().unwrap().is_empty());
+        }
+    }
+
+    /// Partial-run speed of the local ASR models on this CPU: the first 1, 2,
+    /// 4, 6, 10 and 15 s of the clips; RTF = run time / audio time (median of 3).
+    /// Run like `pipeline_end_to_end`; `MORAGO_TEST_ASR=<ids, comma>` (default
+    /// SenseVoice Small and Qwen3-ASR).
+    #[test]
+    #[ignore]
+    fn partial_run_rtf() {
+        let models_dir = models_dir();
+        let ids = std::env::var("MORAGO_TEST_ASR")
+            .unwrap_or_else(|_| format!("{},{}", models::SENSE_VOICE_ID, models::QWEN3_ASR_ID));
+        let clips = [read_wav("en0"), read_wav("sv_ja"), read_wav("sv_ko")].concat();
+        for id in ids.split(',') {
+            ensure_model(&models_dir, id);
+            let config = crate::settings::AsrConfig::Local {
+                model_id: id.into(),
+            };
+            let mut asr = speech::build_asr(&config, None, &models_dir).unwrap();
+            for secs in [1u64, 2, 4, 6, 10, 15] {
+                let seg = SpeechSegment {
+                    source: SourceKind::System,
+                    start_ms: 0,
+                    end_ms: secs * 1000,
+                    samples: clips[..secs as usize * 16_000].to_vec(),
+                };
+                asr.transcribe(&seg).unwrap();
+                let mut runs: Vec<Duration> = (0..3)
+                    .map(|_| {
+                        let started = Instant::now();
+                        asr.transcribe(&seg).unwrap();
+                        started.elapsed()
+                    })
+                    .collect();
+                runs.sort();
+                println!(
+                    "{id} {secs:>2} s: {:.0?}, RTF {:.3}",
+                    runs[1],
+                    runs[1].as_secs_f64() / secs as f64
+                );
+            }
         }
     }
 }

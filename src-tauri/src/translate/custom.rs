@@ -5,6 +5,8 @@ use crate::secrets::Secret;
 use crate::settings::ReasoningEffort;
 use crate::types::Endpoint;
 use anyhow::{Context, anyhow};
+use crossbeam_channel::RecvTimeoutError;
+use reqwest::blocking::RequestBuilder;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -106,26 +108,21 @@ impl CustomTranslator {
         params
     }
 
-    /// Sends one request. Returns the HTTP status and the body text.
-    fn post(&self, body: &Value) -> anyhow::Result<(u16, String)> {
+    fn request(&self, body: &Value) -> RequestBuilder {
         let mut request = self.client.post(&self.url).json(body);
         if let Some(key) = &self.key {
             request = request.bearer_auth(key.expose());
         }
-        let response = request.send().map_err(|e| {
-            anyhow!(
-                "번역 서버에 연결하지 못했습니다: {}",
-                self.redact(&e.without_url().to_string())
-            )
-        })?;
-        let status = response.status().as_u16();
-        let text = response.text().map_err(|e| {
-            anyhow!(
-                "번역 서버의 응답을 읽지 못했습니다: {}",
-                self.redact(&e.without_url().to_string())
-            )
-        })?;
-        Ok((status, text))
+        request
+    }
+
+    /// Sends one request. Returns the HTTP status and the body text.
+    fn post(&self, body: &Value) -> anyhow::Result<(u16, String)> {
+        send(self.request(body)).map_err(|e| self.http_error(e))
+    }
+
+    fn http_error(&self, (what, e): (&str, reqwest::Error)) -> anyhow::Error {
+        anyhow!("{what}: {}", self.redact(&e.without_url().to_string()))
     }
 
     /// Removes the key from text that comes from the server or the network stack.
@@ -136,6 +133,21 @@ impl CustomTranslator {
         }
     }
 }
+
+/// Returns the HTTP status and the body text, or the failed step and its error.
+fn send(request: RequestBuilder) -> Result<(u16, String), (&'static str, reqwest::Error)> {
+    let response = request
+        .send()
+        .map_err(|e| ("번역 서버에 연결하지 못했습니다", e))?;
+    let status = response.status().as_u16();
+    let text = response
+        .text()
+        .map_err(|e| ("번역 서버의 응답을 읽지 못했습니다", e))?;
+    Ok((status, text))
+}
+
+/// How often a partial request in flight checks `stop`.
+const STOP_POLL: Duration = Duration::from_millis(20);
 
 /// The server's error text: `error.message`, `error` or the raw body.
 fn error_text(body: &str) -> String {
@@ -239,6 +251,43 @@ impl Translator for CustomTranslator {
             return Err(anyhow!("번역 서버가 빈 번역문을 돌려주었습니다"));
         }
         self.history.push(text);
+        Ok(translation)
+    }
+
+    /// One request with the current parameters: no retry, no history push, no notice.
+    /// The request runs on its own thread. When `stop` returns true, this
+    /// returns at once and the reply is dropped, so a final utterance does not
+    /// wait for a slow server.
+    fn translate_partial(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        if stop() {
+            return Err(anyhow!("stopped"));
+        }
+        let request = self.request(&self.request_body(text, source_language, target_language));
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send(send(request));
+        });
+        let (status, response_text) = loop {
+            match rx.recv_timeout(STOP_POLL) {
+                Ok(reply) => break reply.map_err(|e| self.http_error(e))?,
+                Err(RecvTimeoutError::Timeout) if stop() => return Err(anyhow!("stopped")),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err(anyhow!("no reply")),
+            }
+        };
+        if !(200..300).contains(&status) {
+            return Err(anyhow!("번역 서버 오류 (HTTP {status})"));
+        }
+        let translation = clean_output(&parse_content(&response_text)?, text);
+        if translation.is_empty() {
+            return Err(anyhow!("번역 서버가 빈 번역문을 돌려주었습니다"));
+        }
         Ok(translation)
     }
 
@@ -636,6 +685,69 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn a_partial_request_has_the_context_but_does_not_change_it() {
+        let (base_url, server) = mock_server_seq(vec![
+            ("200 OK", ok_body("하나")),
+            ("200 OK", ok_body("둘의 앞")),
+        ]);
+        let mut t = translator(base_url, None);
+        t.translate("one", Some("en"), "ko").unwrap();
+        let out = t
+            .translate_partial("two so", Some("en"), "ko", &|| false)
+            .unwrap();
+        assert_eq!(out, "둘의 앞");
+        let requests = server.join().unwrap();
+        let system = |body: &Value| body["messages"][0]["content"].as_str().unwrap().to_string();
+        assert!(system(&request_json(&requests[1])).contains("- one"));
+        let next = system(&t.request_body("three", Some("en"), "ko"));
+        assert!(next.contains("- one") && !next.contains("two so"), "{next}");
+    }
+
+    #[test]
+    fn a_partial_request_is_not_sent_when_stop_is_set() {
+        // No server: a request would fail to connect, not return "stopped".
+        let mut t = translator("http://127.0.0.1:9/v1".into(), None);
+        let err = t
+            .translate_partial("two", Some("en"), "ko", &|| true)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "stopped");
+    }
+
+    /// A slow server: a partial request in flight returns soon after `stop`,
+    /// so the final utterance does not wait for the reply.
+    #[test]
+    fn a_partial_request_in_flight_returns_soon_after_stop() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            std::thread::sleep(Duration::from_secs(2));
+            let body = ok_body("늦은 번역");
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        });
+        let mut t = translator(base_url, None);
+        let started = std::time::Instant::now();
+        let stop_at = started + Duration::from_millis(300);
+        let err = t
+            .translate_partial("two", Some("en"), "ko", &|| {
+                std::time::Instant::now() >= stop_at
+            })
+            .unwrap_err();
+        let waited = started.elapsed();
+        println!("partial request stopped after {waited:?} (server answers after 2 s)");
+        assert_eq!(err.to_string(), "stopped");
+        assert!(waited < Duration::from_millis(1500), "{waited:?}");
+        server.join().unwrap();
     }
 
     #[test]

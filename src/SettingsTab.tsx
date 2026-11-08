@@ -249,18 +249,31 @@ const EFFORTS: { value: ReasoningEffort | ""; label: string }[] = [
   { value: "high", label: "high" },
 ];
 
+/** `partial_interval_ms`: off, then 0.5 s to 10 s in 0.5 s steps. */
+const INTERVALS: { value: string; label: string }[] = [
+  { value: "off", label: "끔" },
+  ...Array.from({ length: 20 }, (_, i) => {
+    const ms = (i + 1) * 500;
+    return { value: String(ms), label: `${ms / 1000}초${ms === 1500 ? "(기본값)" : ""}` };
+  }),
+];
+
 function EndpointForm({
   role,
   endpoint,
   effort,
+  interval,
   onCommit,
   onEffort,
+  onInterval,
 }: {
   role: KeyRole;
   endpoint: Endpoint;
   effort?: ReasoningEffort;
+  interval?: number | null;
   onCommit: (e: Endpoint) => void;
   onEffort: (e: ReasoningEffort | undefined) => void;
+  onInterval: (ms: number | null) => void;
 }) {
   const [url, setUrl] = useState(endpoint.base_url);
   const [model, setModel] = useState(endpoint.model);
@@ -335,6 +348,19 @@ function EndpointForm({
             onChange={(v) => onEffort(v === "" ? undefined : (v as ReasoningEffort))}
             options={EFFORTS}
           />
+          <span className="flab" aria-hidden="true">중간 번역 간격</span>
+          <Select
+            label="중간 번역 간격"
+            width={260}
+            value={interval === null ? "off" : String(interval ?? 1500)}
+            onChange={(v) => onInterval(v === "off" ? null : Number(v))}
+            options={INTERVALS}
+          />
+          <span />
+          <p className="fhint">
+            말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다. 간격이 짧을수록 요청이 많아져 요금이
+            늘어납니다.
+          </p>
         </>
       )}
       <span />
@@ -353,17 +379,25 @@ function ProviderCard({ role }: { role: KeyRole }) {
   // Remember the other variant, so a switch back does not lose what the user typed.
   const lastEndpoint = useRef<Endpoint>({ base_url: "", model: "" });
   const lastEffort = useRef<ReasoningEffort | undefined>(undefined);
+  const lastInterval = useRef<number | null | undefined>(undefined);
   const lastLocal = useRef<string | null>(null);
   if (cfg?.kind === "custom") {
     lastEndpoint.current = cfg.endpoint;
     lastEffort.current = cfg.reasoning_effort;
+    lastInterval.current = cfg.partial_interval_ms;
   }
   if (cfg?.kind === "local") lastLocal.current = cfg.model_id;
   if (!cfg) return null;
   const set = (c: ProviderConfig) => updateSettings(role === "asr" ? { asr: c } : { translate: c });
-  // The default is the absent key, as in the settings file.
-  const custom = (endpoint: Endpoint, effort?: ReasoningEffort): ProviderConfig =>
-    role === "translate" && effort ? { kind: "custom", endpoint, reasoning_effort: effort } : { kind: "custom", endpoint };
+  // An undefined value is an absent key in JSON: the default, as in the settings file.
+  const custom = (
+    endpoint: Endpoint,
+    effort: ReasoningEffort | undefined,
+    interval: number | null | undefined,
+  ): ProviderConfig =>
+    role === "translate"
+      ? { kind: "custom", endpoint, reasoning_effort: effort, partial_interval_ms: interval }
+      : { kind: "custom", endpoint };
 
   return (
     <div className="card">
@@ -371,7 +405,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom") set(custom(lastEndpoint.current, lastEffort.current));
+          if (k === "custom") set(custom(lastEndpoint.current, lastEffort.current, lastInterval.current));
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
@@ -397,8 +431,10 @@ function ProviderCard({ role }: { role: KeyRole }) {
             role={role}
             endpoint={cfg.endpoint}
             effort={cfg.reasoning_effort}
-            onCommit={(endpoint) => set(custom(endpoint, cfg.reasoning_effort))}
-            onEffort={(effort) => set(custom(cfg.endpoint, effort))}
+            interval={cfg.partial_interval_ms}
+            onCommit={(endpoint) => set(custom(endpoint, cfg.reasoning_effort, cfg.partial_interval_ms))}
+            onEffort={(effort) => set(custom(cfg.endpoint, effort, cfg.partial_interval_ms))}
+            onInterval={(ms) => set(custom(cfg.endpoint, cfg.reasoning_effort, ms))}
           />
           <span className="fhint">
             OpenAI 호환 주소를 씁니다(Ollama, LM Studio, vLLM도 가능). API 키는 Windows 자격 증명 관리자, macOS 키체인에만

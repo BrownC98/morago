@@ -26,7 +26,16 @@ pub enum TranslateConfig {
         /// `None` = default: the request has no `reasoning_effort` key.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reasoning_effort: Option<ReasoningEffort>,
+        /// Least time between two partial translation requests of one speech
+        /// (500..=10000 ms). `None` (`null`) = no partial requests ("끔").
+        #[serde(default = "default_partial_interval_ms")]
+        partial_interval_ms: Option<u32>,
     },
+}
+
+/// A file without the field (from before it) gets 1.5 s.
+fn default_partial_interval_ms() -> Option<u32> {
+    Some(1500)
 }
 
 /// Value of the `reasoning_effort` request field of a custom translation server.
@@ -214,8 +223,32 @@ mod tests {
                     model: "gpt-test".into(),
                 },
                 reasoning_effort: effort,
+                partial_interval_ms: Some(1500),
             },
             ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn partial_interval_round_trip_and_off_is_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (interval, text) in [(Some(2500), "2500"), (None, "null")] {
+            let mut s = translate_custom(None);
+            if let TranslateConfig::Custom {
+                partial_interval_ms,
+                ..
+            } = &mut s.translate
+            {
+                *partial_interval_ms = interval;
+            }
+            save(&path, &s).unwrap();
+            let file = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                file.contains(&format!("\"partial_interval_ms\": {text}")),
+                "{file}"
+            );
+            assert_eq!(load(&path).unwrap(), s);
         }
     }
 
@@ -253,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_from_before_reasoning_effort_loads_unchanged() {
+    fn a_file_from_before_reasoning_effort_and_partial_interval_loads_with_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(

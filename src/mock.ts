@@ -28,7 +28,7 @@ let settings: Settings = {
   target_language: "ko",
   asr: { kind: "local", model_id: "sense-voice-small" },
   meeting_language: null,
-  translate: { kind: "custom", endpoint: { base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" } },
+  translate: { kind: "custom", endpoint: { base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" }, partial_interval_ms: 1500 },
   diarize: true,
   capture_mic: true,
   capture_system: true,
@@ -212,11 +212,25 @@ function startRun(): SessionMeta {
   }
 
   let n = 0;
+  const STEPS = 5;
+  const cut = (s: string, k: number) => s.slice(0, Math.ceil((s.length * k) / STEPS));
   const speak = () => {
     const l = SCRIPT[n % SCRIPT.length];
-    const elapsed = Date.now() - r.startedAt;
-    // Live partial text first (reserved event), then the finished utterance 1.2 s later.
-    emit("utterance-partial", { source: l.source, start_ms: Math.max(0, elapsed - 1000), text: l.original.slice(0, Math.ceil(l.original.length * 0.55)) });
+    const start = Date.now() - r.startedAt;
+    // Like the engine: the partial text grows every 0.7 s, its translation one step behind,
+    // then the finished utterance replaces it.
+    for (let k = 1; k < STEPS; k++) {
+      window.setTimeout(() => {
+        if (run !== r) return;
+        const translated = l.tr !== "same" && l.tr !== "fail" && k > 1;
+        emit("utterance-partial", {
+          source: l.source,
+          start_ms: start,
+          text: cut(l.original, k),
+          translation: translated ? cut(l.tr, k - 1) : null,
+        });
+      }, (k - 1) * 700);
+    }
     window.setTimeout(() => {
       if (run !== r) return;
       n++;
@@ -225,7 +239,7 @@ function startRun(): SessionMeta {
         id: n,
         source: l.source,
         speaker: l.speaker,
-        start_ms: Math.max(0, end - 4000),
+        start_ms: start,
         end_ms: end,
         language: l.language,
         original: l.original,
@@ -242,10 +256,10 @@ function startRun(): SessionMeta {
           if (l.tr === "fail") emit("engine-error", { stage: "translate", source: null, message: "번역 서비스에 연결하지 못했습니다." });
         }, 1400);
       }
-    }, 1200);
+    }, (STEPS - 1) * 700);
   };
   window.setTimeout(() => run === r && speak(), 400);
-  r.timers.push(window.setInterval(speak, 2600));
+  r.timers.push(window.setInterval(speak, 3600));
   return meta;
 }
 
