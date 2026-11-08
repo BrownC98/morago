@@ -87,7 +87,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Windows 2022: nvcc 12.9 accepts Visual Studio 2017-2022 only, and
+        # windows-latest has Visual Studio 2026 (run 42495337555).
+        os: [windows-2022, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +109,8 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: check
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           # The unpacked sherpa-onnx libs live outside target/debug.
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
           # Only the integration branch and master save; work branches restore.
@@ -129,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-2022, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
       LLAMA_LIB_PROFILE: Release
@@ -149,6 +153,8 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: e2e
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
       - uses: actions/cache@v4
         with:
@@ -173,7 +179,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             bundles: nsis
           - os: macos-latest
             bundles: dmg
@@ -195,6 +201,8 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: bundle
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           save-if: false
       - run: pnpm install --frozen-lockfile
       # The Tauri bundler downloads NSIS from GitHub releases without a token;

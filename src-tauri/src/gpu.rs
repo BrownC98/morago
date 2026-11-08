@@ -140,7 +140,17 @@ pub fn download_pack(
     if pack_installed(gpu_dir) {
         return Ok(());
     }
-    crate::models::download_spec(gpu_dir, &PACK, progress, cancel)?;
+    // One cuBLAS archive is 549 MB: a dropped connection is not rare (host, 2026-11-08).
+    let mut attempt = 1;
+    loop {
+        match crate::models::download_spec(gpu_dir, &PACK, progress, cancel) {
+            Err(e) if attempt < 3 && !cancel.load(Ordering::Relaxed) => {
+                log::warn!("GPU pack download attempt {attempt} failed: {e:#}");
+                attempt += 1;
+            }
+            result => break result?,
+        }
+    }
     let archives = gpu_dir.join(PACK_ID);
     let part = archives.join("bin.part");
     let _ = std::fs::remove_dir_all(&part);
