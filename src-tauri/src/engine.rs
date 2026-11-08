@@ -411,7 +411,7 @@ fn vad_loop(
     sink: Arc<dyn Sink>,
 ) {
     let mut warning = DropWarning::new(
-        "asr",
+        "notice",
         "인식이 밀립니다: 설정에서 더 작은 음성 인식 모델을 고르세요.",
     );
     let mut on_drop = |seg: SpeechSegment| {
@@ -463,7 +463,7 @@ fn asr_loop(
     sink: Arc<dyn Sink>,
 ) {
     let mut warning = DropWarning::new(
-        "translate",
+        "notice",
         "번역이 밀립니다: 설정에서 더 작은 번역 모델을 고르세요.",
     );
     // An utterance that leaves the full translation queue keeps its original
@@ -537,7 +537,13 @@ fn translate_loop(
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage
         } else {
-            match translator.translate(&u.original, u.language.as_deref(), &target_now) {
+            let result = translator.translate(&u.original, u.language.as_deref(), &target_now);
+            if let Some(notice) = translator.take_notice() {
+                // Stage "notice": the UI shows it as a toast that the next
+                // good result does not clear (gate review of 61c5a17).
+                sink.error("notice", None, &notice);
+            }
+            match result {
                 Ok(text) => TranslationState::Done {
                     target: target_now,
                     text,

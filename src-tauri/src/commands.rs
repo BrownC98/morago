@@ -150,7 +150,7 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
     if let AsrConfig::Custom { endpoint } = &settings.asr {
         check_base_url(&endpoint.base_url)?;
     }
-    if let TranslateConfig::Custom { endpoint } = &settings.translate {
+    if let TranslateConfig::Custom { endpoint, .. } = &settings.translate {
         check_base_url(&endpoint.base_url)?;
     }
     settings::save(&state.settings_path, &settings).map_err(err)?;

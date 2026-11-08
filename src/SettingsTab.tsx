@@ -6,6 +6,7 @@ import {
   type KeyRole,
   type ModelInfo,
   type ProviderConfig,
+  type ReasoningEffort,
   type ThemeSetting,
 } from "./api";
 import { bytes, languageName, TARGET_LANGUAGES } from "./format";
@@ -207,14 +208,27 @@ function KeyField({ role, baseUrl }: { role: KeyRole; baseUrl: string }) {
   );
 }
 
+const EFFORTS: { value: ReasoningEffort | ""; label: string }[] = [
+  { value: "", label: "기본값(보내지 않음)" },
+  { value: "none", label: "none" },
+  { value: "minimal", label: "minimal" },
+  { value: "low", label: "low" },
+  { value: "medium", label: "medium" },
+  { value: "high", label: "high" },
+];
+
 function EndpointForm({
   role,
   endpoint,
+  effort,
   onCommit,
+  onEffort,
 }: {
   role: KeyRole;
   endpoint: Endpoint;
+  effort?: ReasoningEffort;
   onCommit: (e: Endpoint) => void;
+  onEffort: (e: ReasoningEffort | undefined) => void;
 }) {
   const [url, setUrl] = useState(endpoint.base_url);
   const [model, setModel] = useState(endpoint.model);
@@ -279,6 +293,18 @@ function EndpointForm({
         onBlur={commit}
         onKeyDown={enter}
       />
+      {role === "translate" && (
+        <>
+          <span className="flab" aria-hidden="true">추론 강도</span>
+          <Select
+            label="추론 강도"
+            width={260}
+            value={effort ?? ""}
+            onChange={(v) => onEffort(v === "" ? undefined : (v as ReasoningEffort))}
+            options={EFFORTS}
+          />
+        </>
+      )}
       <span />
       <p className={test && test !== "busy" && !test.ok ? "fhint errtext" : "fhint"} role="status">
         {test === "busy" ? "연결을 시험하는 중…" : test ? `${test.ok ? "연결됨. " : "연결 실패. "}${test.message}` : ""}
@@ -294,11 +320,18 @@ function ProviderCard({ role }: { role: KeyRole }) {
   const list = models.filter((m) => m.kind === wantKind);
   // Remember the other variant, so a switch back does not lose what the user typed.
   const lastEndpoint = useRef<Endpoint>({ base_url: "", model: "" });
+  const lastEffort = useRef<ReasoningEffort | undefined>(undefined);
   const lastLocal = useRef<string | null>(null);
-  if (cfg?.kind === "custom") lastEndpoint.current = cfg.endpoint;
+  if (cfg?.kind === "custom") {
+    lastEndpoint.current = cfg.endpoint;
+    lastEffort.current = cfg.reasoning_effort;
+  }
   if (cfg?.kind === "local") lastLocal.current = cfg.model_id;
   if (!cfg) return null;
   const set = (c: ProviderConfig) => updateSettings(role === "asr" ? { asr: c } : { translate: c });
+  // The default is the absent key, as in the settings file.
+  const custom = (endpoint: Endpoint, effort?: ReasoningEffort): ProviderConfig =>
+    role === "translate" && effort ? { kind: "custom", endpoint, reasoning_effort: effort } : { kind: "custom", endpoint };
 
   return (
     <div className="card">
@@ -306,7 +339,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom") set({ kind: "custom", endpoint: lastEndpoint.current });
+          if (k === "custom") set(custom(lastEndpoint.current, lastEffort.current));
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
@@ -328,7 +361,13 @@ function ProviderCard({ role }: { role: KeyRole }) {
         </div>
       ) : (
         <>
-          <EndpointForm role={role} endpoint={cfg.endpoint} onCommit={(endpoint) => set({ kind: "custom", endpoint })} />
+          <EndpointForm
+            role={role}
+            endpoint={cfg.endpoint}
+            effort={cfg.reasoning_effort}
+            onCommit={(endpoint) => set(custom(endpoint, cfg.reasoning_effort))}
+            onEffort={(effort) => set(custom(cfg.endpoint, effort))}
+          />
           <span className="fhint">
             OpenAI 호환 주소를 씁니다(Ollama, LM Studio, vLLM도 가능). API 키는 Windows 자격 증명 관리자, macOS 키체인에만
             저장하고 설정 파일, 기록, 내보낸 파일에는 넣지 않습니다.

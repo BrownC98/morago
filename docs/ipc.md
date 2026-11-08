@@ -35,6 +35,6 @@ Errors: a command rejects with a Korean user-facing string that names the proble
 | `utterance-partial` | `PartialText` `{ source, start_ms, text }`: live text of speech that has not ended (reserved for the streaming "live mode"; the first release does not send it). Show one grey line per source; remove it when an `utterance` of that source arrives. |
 | `audio-level` | `{ source: "mic"\|"system", rms: number }` (0..1, about 10 per second while running) |
 | `session-state` | `{ running: boolean, sessionId: string \| null, startedAt: string \| null }` |
-| `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model", source: "mic"\|"system"\|null, message: string }` |
+| `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model"\|"notice", source: "mic"\|"system"\|null, message: string }`. Stage `notice` (a setting the server does not support, skipped work when a queue is full) is shown as a toast; the other stages show in the status bar until the next good result. |
 | `model-download` | `DownloadProgress` |
 | `model-download-done` | `{ modelId: string, error: string \| null }` |

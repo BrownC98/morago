@@ -21,7 +21,37 @@ pub enum TranslateConfig {
     /// Local LLM from `models::catalog()` (kind Translation).
     Local { model_id: String },
     /// OpenAI-compatible `POST {base_url}/chat/completions`.
-    Custom { endpoint: Endpoint },
+    Custom {
+        endpoint: Endpoint,
+        /// `None` = default: the request has no `reasoning_effort` key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<ReasoningEffort>,
+    },
+}
+
+/// Value of the `reasoning_effort` request field of a custom translation server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    /// Sent as `"none"`.
+    #[serde(rename = "none")]
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -163,6 +193,64 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, ["settings.json"], "no temp file left");
+    }
+
+    fn translate_custom(effort: Option<ReasoningEffort>) -> Settings {
+        Settings {
+            translate: TranslateConfig::Custom {
+                endpoint: Endpoint {
+                    base_url: "http://localhost:8000/v1".into(),
+                    model: "gpt-test".into(),
+                },
+                reasoning_effort: effort,
+            },
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_round_trip_with_lowercase_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (effort, text) in [
+            (ReasoningEffort::Off, "none"),
+            (ReasoningEffort::Minimal, "minimal"),
+            (ReasoningEffort::Low, "low"),
+            (ReasoningEffort::Medium, "medium"),
+            (ReasoningEffort::High, "high"),
+        ] {
+            let s = translate_custom(Some(effort));
+            save(&path, &s).unwrap();
+            let file = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                file.contains(&format!("\"reasoning_effort\": \"{text}\"")),
+                "{file}"
+            );
+            assert_eq!(effort.as_str(), text);
+            assert_eq!(load(&path).unwrap(), s);
+        }
+    }
+
+    #[test]
+    fn default_reasoning_effort_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save(&path, &translate_custom(None)).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(!file.contains("reasoning_effort"), "{file}");
+        assert_eq!(load(&path).unwrap(), translate_custom(None));
+    }
+
+    #[test]
+    fn a_file_from_before_reasoning_effort_loads_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"translate":{"kind":"custom","endpoint":{"base_url":"http://localhost:8000/v1","model":"gpt-test"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(load(&path).unwrap(), translate_custom(None));
     }
 
     #[test]
