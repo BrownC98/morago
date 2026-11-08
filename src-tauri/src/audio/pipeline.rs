@@ -23,15 +23,13 @@ pub fn downmix<T: Copy>(data: &[T], channels: usize, conv: impl Fn(T) -> f32) ->
 }
 
 /// Mono sample rate converter with a fixed output chunk size.
-enum Converter {
-    /// Input is already 16 kHz.
-    Passthrough { chunk: usize, out: Vec<f32> },
-    Fft {
-        resampler: Fft<f32>,
-        out: Vec<f32>,
-        /// Output frames still to drop: the resampler delay at the start of a segment.
-        skip: usize,
-    },
+struct Converter {
+    /// `None` when the input is already 16 kHz.
+    resampler: Option<Fft<f32>>,
+    chunk: usize,
+    out: Vec<f32>,
+    /// Output frames still to drop: the resampler delay at the start of a segment.
+    skip: usize,
 }
 
 impl Converter {
@@ -39,67 +37,56 @@ impl Converter {
         let out_rate = SAMPLE_RATE as usize;
         let chunk = out_rate * CHUNK_MS / 1000;
         if in_rate == out_rate {
-            return Ok(Self::Passthrough {
+            return Ok(Self {
+                resampler: None,
                 chunk,
                 out: vec![0.0; chunk],
+                skip: 0,
             });
         }
         let resampler = Fft::<f32>::new(in_rate, out_rate, chunk, 1, FixedSync::Output)
             .map_err(|e| anyhow::anyhow!("resampler: {e}"))?;
-        let out = vec![0.0; resampler.output_frames_max()];
-        let skip = resampler.output_delay();
-        Ok(Self::Fft {
-            resampler,
-            out,
-            skip,
+        Ok(Self {
+            out: vec![0.0; resampler.output_frames_max()],
+            skip: resampler.output_delay(),
+            chunk,
+            resampler: Some(resampler),
         })
     }
 
     /// Input frames that the next `process` call needs.
     fn chunk_in(&self) -> usize {
-        match self {
-            Self::Passthrough { chunk, .. } => *chunk,
-            Self::Fft { resampler, .. } => resampler.input_frames_next(),
-        }
+        self.resampler
+            .as_ref()
+            .map_or(self.chunk, |r| r.input_frames_next())
     }
 
     /// Converts exactly `chunk_in()` frames. The result is aligned with the input: the
     /// resampler delay is cut away from the start of a segment, so the result of the first call
     /// is shorter by that delay.
     fn process(&mut self, input: &[f32]) -> anyhow::Result<&[f32]> {
-        match self {
-            Self::Passthrough { out, .. } => {
-                out[..input.len()].copy_from_slice(input);
-                Ok(&out[..input.len()])
-            }
-            Self::Fft {
-                resampler,
-                out,
-                skip,
-            } => {
-                let frames = input.len();
-                let in_adapter = InterleavedSlice::new(input, 1, frames)
-                    .map_err(|e| anyhow::anyhow!("resampler input: {e}"))?;
-                let out_frames = out.len();
-                let mut out_adapter = InterleavedSlice::new_mut(out.as_mut_slice(), 1, out_frames)
-                    .map_err(|e| anyhow::anyhow!("resampler output: {e}"))?;
-                let (_, written) = resampler
-                    .process_into_buffer(&in_adapter, &mut out_adapter, None)
-                    .map_err(|e| anyhow::anyhow!("resampler: {e}"))?;
-                let cut = (*skip).min(written);
-                *skip -= cut;
-                Ok(&out[cut..written])
-            }
-        }
+        let Some(resampler) = self.resampler.as_mut() else {
+            self.out[..input.len()].copy_from_slice(input);
+            return Ok(&self.out[..input.len()]);
+        };
+        let frames = input.len();
+        let in_adapter = InterleavedSlice::new(input, 1, frames)
+            .map_err(|e| anyhow::anyhow!("resampler input: {e}"))?;
+        let out_frames = self.out.len();
+        let mut out_adapter = InterleavedSlice::new_mut(self.out.as_mut_slice(), 1, out_frames)
+            .map_err(|e| anyhow::anyhow!("resampler output: {e}"))?;
+        let (_, written) = resampler
+            .process_into_buffer(&in_adapter, &mut out_adapter, None)
+            .map_err(|e| anyhow::anyhow!("resampler: {e}"))?;
+        let cut = self.skip.min(written);
+        self.skip -= cut;
+        Ok(&self.out[cut..written])
     }
 
     fn reset(&mut self) {
-        if let Self::Fft {
-            resampler, skip, ..
-        } = self
-        {
+        if let Some(resampler) = self.resampler.as_mut() {
             resampler.reset();
-            *skip = resampler.output_delay();
+            self.skip = resampler.output_delay();
         }
     }
 }
