@@ -3,14 +3,16 @@
 use crate::types::{SessionMeta, TranslationState, Utterance};
 use std::fmt::Write;
 
-/// Display name: the user's name, else "화자 N" for "SN", else the raw id.
+/// Display name on one line: the user's name, else "화자 N" for "SN", else
+/// the raw id. A name from the UI can have line breaks; they would end an
+/// SRT cue or the Markdown header line.
 fn speaker_name(meta: &SessionMeta, speaker: &str) -> String {
     if let Some(name) = meta.speaker_names.get(speaker) {
-        return name.clone();
+        return one_line(name);
     }
     match speaker.strip_prefix('S') {
         Some(n) if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) => format!("화자 {n}"),
-        _ => speaker.to_string(),
+        _ => one_line(speaker),
     }
 }
 
@@ -24,6 +26,26 @@ fn translation(u: &Utterance) -> Option<&str> {
 /// Collapses line breaks and runs of spaces: one cue or quote line.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// User text as one Markdown line that shows as typed: a backslash before
+/// inline markup characters and before a block marker at the line start
+/// (heading, quote, list, setext underline, ordered list number).
+fn md(text: &str) -> String {
+    let line = one_line(text);
+    let mut out = String::with_capacity(line.len() + 8);
+    if line.starts_with(['#', '>', '-', '+', '=']) {
+        out.push('\\');
+    }
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    for (i, c) in line.chars().enumerate() {
+        let list_number = digits > 0 && i == digits && matches!(c, '.' | ')');
+        if list_number || matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '~') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn clock(ms: u64) -> String {
@@ -43,7 +65,7 @@ fn date(rfc3339: &str) -> String {
 
 pub(super) fn markdown(meta: &SessionMeta, utterances: &[Utterance]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# {}\n", one_line(&meta.title));
+    let _ = writeln!(out, "# {}\n", md(&meta.title));
     let _ = writeln!(out, "- 날짜: {}", date(&meta.started_at));
     let mut languages: Vec<&str> = Vec::new();
     for lang in utterances.iter().filter_map(|u| u.language.as_deref()) {
@@ -55,20 +77,20 @@ pub(super) fn markdown(meta: &SessionMeta, utterances: &[Utterance]) -> String {
         let _ = writeln!(out, "- 원문 언어: {}", languages.join(", "));
     }
     let _ = writeln!(out, "- 번역 언어: {}", meta.target_language);
-    let _ = writeln!(out, "- 음성 인식: {}", meta.asr_label);
-    let _ = writeln!(out, "- 번역: {}", meta.translator_label);
+    let _ = writeln!(out, "- 음성 인식: {}", md(&meta.asr_label));
+    let _ = writeln!(out, "- 번역: {}", md(&meta.translator_label));
     for u in utterances {
         // Two trailing spaces: a Markdown line break inside the paragraph.
         let _ = write!(
             out,
             "\n**{}** · {}–{}  \n{}\n",
-            speaker_name(meta, &u.speaker),
+            md(&speaker_name(meta, &u.speaker)),
             clock(u.start_ms),
             clock(u.end_ms),
-            one_line(&u.original)
+            md(&u.original)
         );
         if let Some(text) = translation(u) {
-            let _ = writeln!(out, "> {}", one_line(text));
+            let _ = writeln!(out, "> {}", md(text));
         }
     }
     out

@@ -97,7 +97,8 @@ fn mask(key: &str) -> String {
 }
 
 /// Trims spaces and one trailing slash; lowercases the scheme and the host
-/// (user info, path and query keep their case).
+/// (user info, path and query keep their case); drops the default port
+/// (`:443` for https, `:80` for http) so both forms find one entry.
 fn normalize_base_url(base_url: &str) -> String {
     let url = base_url.trim();
     let url = url.strip_suffix('/').unwrap_or(url);
@@ -110,6 +111,15 @@ fn normalize_base_url(base_url: &str) -> String {
     let authority = match authority.rsplit_once('@') {
         Some((user, host)) => format!("{user}@{}", host.to_ascii_lowercase()),
         None => authority.to_ascii_lowercase(),
+    };
+    let default_port = match scheme.as_deref() {
+        Some("https") => Some(":443"),
+        Some("http") => Some(":80"),
+        _ => None,
+    };
+    let authority = match default_port.and_then(|p| authority.strip_suffix(p)) {
+        Some(short) => short.to_string(),
+        None => authority,
     };
     match scheme {
         Some(s) => format!("{s}://{authority}{tail}"),
@@ -211,6 +221,11 @@ mod tests {
         assert_eq!(n("https://Ab:Cd@HOST/x"), "https://Ab:Cd@host/x");
         assert_eq!(n("HOST:8080/Path/"), "host:8080/Path");
         assert_eq!(n("https://HOST?Q=A"), "https://host?Q=A");
+        assert_eq!(n("https://host:443/v1"), "https://host/v1");
+        assert_eq!(n("http://host:80/v1/"), "http://host/v1");
+        assert_eq!(n("http://host:8080"), "http://host:8080");
+        assert_eq!(n("https://host:80/v1"), "https://host:80/v1");
+        assert_eq!(n("http://host:8443"), "http://host:8443");
     }
 
     #[test]

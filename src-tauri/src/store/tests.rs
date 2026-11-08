@@ -94,6 +94,57 @@ fn torn_last_line_is_skipped() {
     assert_eq!(list.iter().map(|u| u.id).collect::<Vec<_>>(), [1, 2]);
 }
 
+/// The first `cut` bytes of the JSON line of `u` (no newline).
+fn part_line(u: &Utterance, cut: usize) -> Vec<u8> {
+    let line = serde_json::to_vec(u).unwrap();
+    line[..cut].to_vec()
+}
+
+#[test]
+fn torn_multibyte_last_line_is_skipped() {
+    let (_d, store) = store();
+    let mut w = store
+        .create(&meta(ID, "2026-11-08T14:02:12+09:00"))
+        .unwrap();
+    w.append(&utt(1, "S1", 0, 1000, done("하나"))).unwrap();
+    // The cut is inside "한" (3 bytes): the file ends with invalid UTF-8.
+    let mut torn = utt(2, "S1", 1000, 2000, TranslationState::Pending);
+    torn.original = "한국어".into();
+    let json = serde_json::to_vec(&torn).unwrap();
+    let cut = json.windows(3).position(|w| w == "한".as_bytes()).unwrap() + 2;
+    w.file.write_all(&part_line(&torn, cut)).unwrap();
+    drop(w);
+    let bytes = std::fs::read(store.root().join(ID).join(UTTERANCES)).unwrap();
+    assert!(std::str::from_utf8(&bytes).is_err());
+    let (_, list) = store.load(ID).unwrap();
+    assert_eq!(list.iter().map(|u| u.id).collect::<Vec<_>>(), [1]);
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert!(store.export(ID, ExportFormat::Markdown).is_ok());
+}
+
+#[test]
+fn damaged_multibyte_line_then_valid_append_keeps_last_valid_update() {
+    let (_d, store) = store();
+    let mut w = store
+        .create(&meta(ID, "2026-11-08T14:02:12+09:00"))
+        .unwrap();
+    w.append(&utt(1, "S1", 0, 1000, TranslationState::Pending))
+        .unwrap();
+    w.append(&utt(1, "S1", 0, 1000, done("첫 번역"))).unwrap();
+    // A failed write cut a translation update of 1 inside a Korean character.
+    let lost = utt(1, "S1", 0, 1000, done("잃은 번역"));
+    let json = serde_json::to_vec(&lost).unwrap();
+    let cut = json.windows(3).position(|w| w == "잃".as_bytes()).unwrap() + 1;
+    w.file.write_all(&part_line(&lost, cut)).unwrap();
+    w.torn = true;
+    w.append(&utt(2, "S2", 1000, 2000, done("둘"))).unwrap();
+    w.finish("2026-11-08T15:00:00+09:00").unwrap();
+    let (_, list) = store.load(ID).unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].translation, done("첫 번역"));
+    assert_eq!(list[1].translation, done("둘"));
+}
+
 #[test]
 fn line_after_a_failed_write_starts_on_a_new_line() {
     let (_d, store) = store();
@@ -213,7 +264,6 @@ fn ids_are_validated_against_traversal() {
     }
     assert!(outside.join(META).exists());
     assert!(valid_id(ID));
-    assert!(valid_id(&new_session_id()));
 }
 
 fn export_fixture(store: &SessionStore) {
@@ -315,6 +365,66 @@ fn export_json_golden() {
         text.starts_with("{\n  \"meta\": {\n    \"id\": \"20261108-140212-ab12\",\n"),
         "{text}"
     );
+}
+
+#[test]
+fn export_escapes_markdown_and_keeps_speaker_names_on_one_line() {
+    let (_d, store) = store();
+    let mut m = meta(ID, "2026-11-08T14:02:12+09:00");
+    m.title = "*초안* 회의".into();
+    m.speaker_names
+        .insert("S1".into(), "Alice\r\n\r\nBob".into());
+    m.speaker_names.insert("S2".into(), "**김**\n".into());
+    let mut w = store.create(&m).unwrap();
+    let mut a = utt(1, "S1", 0, 1000, done("> 인용처럼 보이는 번역"));
+    a.original = "# 결론".into();
+    w.append(&a).unwrap();
+    let mut b = utt(2, "S2", 1000, 2000, done("1. 첫째"));
+    b.original = "- 1. 예산".into();
+    w.append(&b).unwrap();
+    let mut c = utt(3, "S1", 2000, 3000, TranslationState::Pending);
+    c.original = "> 원문 = a_b `code` [링크](x) <b>".into();
+    w.append(&c).unwrap();
+    w.finish("2026-11-08T15:00:00+09:00").unwrap();
+
+    let text = store.export(ID, ExportFormat::Markdown).unwrap();
+    let body = text.split_once("- 번역: Local Qwen2.5 3B\n").unwrap().1;
+    assert!(text.starts_with("# \\*초안\\* 회의\n"), "{text}");
+    let expected = concat!(
+        "\n",
+        "**Alice Bob** · 00:00:00–00:00:01  \n",
+        "\\# 결론\n",
+        "> \\> 인용처럼 보이는 번역\n",
+        "\n",
+        "**\\*\\*김\\*\\*** · 00:00:01–00:00:02  \n",
+        "\\- 1. 예산\n",
+        "> 1\\. 첫째\n",
+        "\n",
+        "**Alice Bob** · 00:00:02–00:00:03  \n",
+        "\\> 원문 = a\\_b \\`code\\` \\[링크\\](x) \\<b>\n",
+    );
+    assert_eq!(body, expected);
+
+    let srt = store.export(ID, ExportFormat::Srt).unwrap();
+    let expected = concat!(
+        "1\n",
+        "00:00:00,000 --> 00:00:01,000\n",
+        "Alice Bob: # 결론\n",
+        "> 인용처럼 보이는 번역\n",
+        "\n",
+        "2\n",
+        "00:00:01,000 --> 00:00:02,000\n",
+        "**김**: - 1. 예산\n",
+        "1. 첫째\n",
+        "\n",
+        "3\n",
+        "00:00:02,000 --> 00:00:03,000\n",
+        "Alice Bob: > 원문 = a_b `code` [링크](x) <b>\n",
+        "\n",
+    );
+    assert_eq!(srt, expected);
+    // One cue per utterance: blocks are separated by exactly one blank line.
+    assert_eq!(srt.trim_end().split("\n\n").count(), 3);
 }
 
 #[test]

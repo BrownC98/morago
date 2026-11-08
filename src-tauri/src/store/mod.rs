@@ -149,12 +149,13 @@ impl SessionStore {
     pub fn load(&self, id: &str) -> anyhow::Result<(SessionMeta, Vec<Utterance>)> {
         let dir = self.dir(id)?;
         let meta = read_meta(&dir)?;
-        let text = match std::fs::read_to_string(dir.join(UTTERANCES)) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        // Bytes, not a string: a crash can cut a UTF-8 character in two.
+        let bytes = match std::fs::read(dir.join(UTTERANCES)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(e).context("발화 기록 파일을 읽을 수 없습니다"),
         };
-        Ok((meta, parse_utterances(id, &text)))
+        Ok((meta, parse_utterances(id, &bytes)))
     }
     /// Changes title and speaker names in meta.json.
     pub fn update_meta(&self, meta: &SessionMeta) -> anyhow::Result<()> {
@@ -195,15 +196,6 @@ impl SessionStore {
     }
 }
 
-/// A new session id `YYYYMMDD-HHMMSS-<4 hex>` from the local time.
-pub fn new_session_id() -> String {
-    let random = uuid::Uuid::new_v4().as_u128() as u16;
-    format!(
-        "{}-{random:04x}",
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    )
-}
-
 /// `^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$`
 fn valid_id(id: &str) -> bool {
     let b = id.as_bytes();
@@ -215,21 +207,37 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-fn parse_utterances(id: &str, text: &str) -> Vec<Utterance> {
+fn parse_utterances(id: &str, bytes: &[u8]) -> Vec<Utterance> {
     let mut by_id = BTreeMap::new();
-    for (n, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
+    for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        match serde_json::from_str::<Utterance>(line) {
+        match serde_json::from_slice::<Utterance>(line) {
             Ok(u) => {
                 by_id.insert(u.id, u);
             }
-            // A crash during a write leaves a torn last line.
-            Err(e) => log::warn!("session {id}: skipped broken line {} ({e})", n + 1),
+            // A crash during a write leaves a torn last line. The log has
+            // no text from the line (meeting content).
+            Err(e) => log::warn!(
+                "session {id}: skipped broken line {} ({})",
+                n + 1,
+                json_error_place(&e)
+            ),
         }
     }
     by_id.into_values().collect()
+}
+
+/// Kind and place of a JSON error, without the values that serde_json
+/// puts in its message.
+pub(crate) fn json_error_place(e: &serde_json::Error) -> String {
+    format!(
+        "{:?} error at line {} column {}",
+        e.classify(),
+        e.line(),
+        e.column()
+    )
 }
 
 fn summary(meta: SessionMeta, utterances: &[Utterance]) -> SessionSummary {
@@ -247,9 +255,9 @@ fn summary(meta: SessionMeta, utterances: &[Utterance]) -> SessionSummary {
 }
 
 fn read_meta(dir: &Path) -> anyhow::Result<SessionMeta> {
-    let text =
-        std::fs::read_to_string(dir.join(META)).context("기록 정보 파일을 읽을 수 없습니다")?;
-    serde_json::from_str(&text).context("기록 정보 파일이 손상되었습니다")
+    let bytes = std::fs::read(dir.join(META)).context("기록 정보 파일을 읽을 수 없습니다")?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("기록 정보 파일이 손상되었습니다({})", json_error_place(&e)))
 }
 
 fn write_meta(dir: &Path, meta: &SessionMeta) -> anyhow::Result<()> {

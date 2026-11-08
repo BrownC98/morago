@@ -75,8 +75,8 @@ impl Default for Settings {
 /// as `settings.json.bad-<timestamp>` and the defaults are returned.
 /// Unknown fields are ignored; missing fields take the defaults.
 pub fn load(path: &Path) -> anyhow::Result<Settings> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
         Err(e) => {
             return Err(anyhow::anyhow!(
@@ -85,18 +85,23 @@ pub fn load(path: &Path) -> anyhow::Result<Settings> {
             ));
         }
     };
-    match serde_json::from_str(&text) {
+    // Bytes, so that bad UTF-8 or UTF-16 goes the corrupt-file way too.
+    // A UTF-8 BOM (some Windows editors) is not damage.
+    let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+    match serde_json::from_slice(json) {
         Ok(settings) => Ok(settings),
         Err(e) => {
+            // The log has the error place only: serde_json messages carry values.
+            let reason = crate::store::json_error_place(&e);
             let backup = backup_path(path);
             // A rename keeps the bytes; the next save writes a new file.
             match std::fs::rename(path, &backup) {
                 Ok(()) => log::warn!(
-                    "settings file is corrupt ({e}); kept it as {} and used the defaults",
+                    "settings file is corrupt ({reason}); kept it as {} and used the defaults",
                     backup.display()
                 ),
                 Err(re) => log::error!(
-                    "settings file is corrupt ({e}); could not keep a copy at {}: {re}",
+                    "settings file is corrupt ({reason}); could not keep a copy at {}: {re}",
                     backup.display()
                 ),
             }
@@ -169,11 +174,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn corrupt_file_is_kept_and_defaults_used() {
+    /// Loads `bytes`: defaults come back and a backup keeps the exact bytes.
+    fn assert_kept(bytes: &[u8]) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, b"{\"theme\": \"dark\", ").unwrap();
+        std::fs::write(&path, bytes).unwrap();
         assert_eq!(load(&path).unwrap(), Settings::default());
         let backups: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -182,7 +187,35 @@ mod tests {
         assert_eq!(backups.len(), 1);
         assert!(backups[0].starts_with("settings.json.bad-"), "{backups:?}");
         let kept = std::fs::read(dir.path().join(&backups[0])).unwrap();
-        assert_eq!(kept, b"{\"theme\": \"dark\", ");
+        assert_eq!(kept, bytes);
+    }
+
+    #[test]
+    fn corrupt_file_is_kept_and_defaults_used() {
+        assert_kept(b"{\"theme\": \"dark\", ");
+    }
+
+    #[test]
+    fn invalid_utf8_file_is_kept_and_defaults_used() {
+        assert_kept(b"{\"theme\": \"dark\", \"mic_device\": \"\xff\xfe\"}");
+    }
+
+    #[test]
+    fn utf16_file_is_kept_and_defaults_used() {
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in r#"{"theme":"dark"}"#.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_kept(&bytes);
+    }
+
+    #[test]
+    fn utf8_bom_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, b"\xEF\xBB\xBF{\"theme\":\"dark\"}").unwrap();
+        assert_eq!(load(&path).unwrap().theme, Theme::Dark);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
