@@ -8,6 +8,8 @@
 mod custom;
 mod local;
 
+pub(crate) use local::on_gpu as local_on_gpu;
+
 use crate::settings::TranslateConfig;
 use std::collections::VecDeque;
 use std::path::Path;

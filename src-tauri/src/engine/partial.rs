@@ -10,7 +10,7 @@ use super::{BacklogRx, Sink};
 use crate::models;
 use crate::settings::{AsrConfig, TranslateConfig};
 use crate::speech;
-use crate::translate::{Translator, needs_translation};
+use crate::translate::{self, Translator, needs_translation};
 use crate::types::{AudioChunk, PartialText, SAMPLE_RATE, SourceKind, SpeechSegment, Utterance};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, after, bounded, never, select};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -21,9 +21,10 @@ use std::time::{Duration, Instant};
 const OFFER_STEP_MS: u64 = 700;
 
 /// True when the ASR is fast enough on the CPU to transcribe the growing
-/// audio of each speech again every 0.7 s.
-/// - SenseVoice Small: yes.
-/// - Qwen3-ASR 0.6B: no.
+/// audio of each speech again every 0.7 s. RTF on 1 to 15 s of audio
+/// (Windows, 4 threads, 2026-11-09):
+/// - SenseVoice Small: yes, RTF 0.024 to 0.054.
+/// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 (2 s per run at 6 s of audio).
 /// - Whisper: no, RTF 0.35 on the CPU (whisper.cpp): the CPU would never rest.
 /// - Custom: no, API cost.
 pub(super) fn enabled(asr: &AsrConfig) -> bool {
@@ -32,9 +33,12 @@ pub(super) fn enabled(asr: &AsrConfig) -> bool {
 
 /// Least time between two partial translation requests of one speech;
 /// `None`: no partial translation.
+/// A local model translates partials only on a GPU. On the CPU they made the
+/// final translations 0.9 to 2.5 s slower (Windows, 16 threads, Gemma 4 E2B,
+/// 2026-11-09), also of a final with no partial work beside it.
 fn translate_interval(config: &TranslateConfig) -> Option<Duration> {
     match config {
-        TranslateConfig::Local { .. } => Some(Duration::ZERO),
+        TranslateConfig::Local { .. } => translate::local_on_gpu().then_some(Duration::ZERO),
         TranslateConfig::Custom {
             partial_interval_ms,
             ..
@@ -473,7 +477,10 @@ mod tests {
 
     #[test]
     fn partial_translation_interval_per_translator() {
-        assert_eq!(translate_interval(&local_translate()), Some(Duration::ZERO));
+        assert_eq!(
+            translate_interval(&local_translate()),
+            translate::local_on_gpu().then_some(Duration::ZERO)
+        );
         assert_eq!(
             translate_interval(&custom(Some(1500))),
             Some(Duration::from_millis(1500))
@@ -614,7 +621,7 @@ mod tests {
         let (asr, go, runs) = gated_asr();
         let target = Arc::new(RwLock::new("ko".to_string()));
         let (mut feed, translations, thread) =
-            start(asr, &local_translate(), target, recorder.clone());
+            start(asr, &custom(Some(1500)), target, recorder.clone());
         offer_taken(&mut feed, 0);
         wait_runs(&runs, 1);
         // The segment ends while the worker runs.

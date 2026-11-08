@@ -31,6 +31,12 @@ fn backend() -> anyhow::Result<&'static LlamaBackend> {
         .map_err(|e| anyhow!("번역 엔진을 시작하지 못했습니다: {e}"))
 }
 
+/// True when the model runs all layers on a GPU: macOS (Metal). Other builds
+/// have no GPU backend.
+pub(crate) fn on_gpu() -> bool {
+    cfg!(target_os = "macos")
+}
+
 pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
@@ -47,8 +53,7 @@ impl LocalTranslator {
             ));
         }
         let backend = backend()?;
-        // All layers to the GPU on macOS (Metal). Other builds have no GPU backend.
-        let gpu_layers = if cfg!(target_os = "macos") { 999 } else { 0 };
+        let gpu_layers = if on_gpu() { 999 } else { 0 };
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
         let model = LlamaModel::load_from_file(backend, &path, &params)
             .map_err(|e| anyhow!("번역 모델을 읽지 못했습니다 ({model_id}): {e}"))?;
@@ -62,29 +67,11 @@ impl LocalTranslator {
         })
     }
 
-    fn run(
-        &self,
-        text: &str,
-        source_language: Option<&str>,
-        target_language: &str,
-        threads: i32,
-        stop: &dyn Fn() -> bool,
-    ) -> anyhow::Result<String> {
-        let system = system_prompt(source_language, target_language, &History::default());
-        let raw = self.generate(&system, text, threads, stop)?;
-        let translation = clean_output(&raw, text);
-        if translation.is_empty() {
-            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
-        }
-        Ok(translation)
-    }
-
     /// Stops with an error before the next token or prompt part when `stop` returns true.
     fn generate(
         &self,
         system: &str,
         text: &str,
-        threads: i32,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
         let backend = backend()?;
@@ -102,8 +89,8 @@ impl LocalTranslator {
         let params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
             .with_n_batch(n_ctx)
-            .with_n_threads(threads)
-            .with_n_threads_batch(threads);
+            .with_n_threads(self.threads)
+            .with_n_threads_batch(self.threads);
         let mut ctx = self.model.new_context(backend, params)?;
 
         // The prompt goes in parts: `stop` waits for one part, not for all of it.
@@ -152,17 +139,10 @@ impl Translator for LocalTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
-        self.run(
-            text,
-            source_language,
-            target_language,
-            self.threads,
-            &|| false,
-        )
+        self.translate_partial(text, source_language, target_language, &|| false)
     }
 
-    /// With half the threads: the final ASR of a speech starts while this
-    /// run stops, and needs free cores. This provider keeps no history.
+    /// The same as `translate`: this provider keeps no history.
     fn translate_partial(
         &mut self,
         text: &str,
@@ -170,8 +150,13 @@ impl Translator for LocalTranslator {
         target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
-        let threads = (self.threads / 2).max(1);
-        self.run(text, source_language, target_language, threads, stop)
+        let system = system_prompt(source_language, target_language, &History::default());
+        let raw = self.generate(&system, text, stop)?;
+        let translation = clean_output(&raw, text);
+        if translation.is_empty() {
+            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
+        }
+        Ok(translation)
     }
 
     fn label(&self) -> String {
