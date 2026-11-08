@@ -162,7 +162,11 @@ fn start_pipeline(
     store: &SessionStore,
     sink: &Arc<dyn Sink>,
 ) -> anyhow::Result<Pipeline> {
-    let asr = speech::build_asr(&settings.asr, models_dir)?;
+    let asr = speech::build_asr(
+        &settings.asr,
+        settings.meeting_language.as_deref(),
+        models_dir,
+    )?;
     let placement = translate_placement(settings, models_dir)?;
     let translator = translate::build_translator(&settings.translate, models_dir, &placement)?;
     let translate_device =
@@ -794,7 +798,7 @@ mod tests {
     fn pipeline_end_to_end() {
         use crate::settings::{AsrConfig, TranslateConfig};
         let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
-        let ids = ["whisper-base", "gemma-4-e2b-it-q4"];
+        let ids = [models::SENSE_VOICE_ID, "gemma-4-e2b-it-q4"];
         let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
         for id in ids {
             if !models::is_installed(&models_dir, id) {
@@ -812,7 +816,7 @@ mod tests {
         };
         let settings = Settings {
             asr: AsrConfig::Local {
-                model_id: "whisper-base".into(),
+                model_id: models::SENSE_VOICE_ID.into(),
             },
             translate: TranslateConfig::Local {
                 model_id: "gemma-4-e2b-it-q4".into(),

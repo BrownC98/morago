@@ -88,6 +88,8 @@ export interface Settings {
   theme: ThemeSetting;
   target_language: string;
   asr: ProviderConfig;
+  /** ISO 639-1 code for speech recognition; null = detect per utterance. */
+  meeting_language: string | null;
   translate: ProviderConfig;
   diarize: boolean;
   capture_mic: boolean;

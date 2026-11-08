@@ -21,20 +21,26 @@ pub use vad::Vad;
 /// Speech recognition for one segment. Runs on a worker thread (blocking).
 pub trait Asr: Send {
     fn transcribe(&mut self, segment: &SpeechSegment) -> anyhow::Result<Transcript>;
-    /// Label for the UI and session meta, for example "로컬 Whisper small".
+    /// Label for the UI and session meta, for example "로컬 SenseVoice Small".
     fn label(&self) -> String;
 }
 
 /// Builds the ASR from settings. Local models are in `models_dir`.
+/// `language` (ISO 639-1, `Settings::meeting_language`): `None` = detect per
+/// segment; else the ASR uses it and returns it as `Transcript::language`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
-pub fn build_asr(config: &AsrConfig, models_dir: &Path) -> anyhow::Result<Box<dyn Asr>> {
+pub fn build_asr(
+    config: &AsrConfig,
+    language: Option<&str>,
+    models_dir: &Path,
+) -> anyhow::Result<Box<dyn Asr>> {
     match config {
-        AsrConfig::Local { model_id } => {
-            Ok(Box::new(local::LocalWhisper::new(models_dir, model_id)?))
-        }
+        AsrConfig::Local { model_id } => Ok(Box::new(local::LocalAsr::new(
+            models_dir, model_id, language,
+        )?)),
         AsrConfig::Custom { endpoint } => {
             let key = secrets::get_key(Role::Asr, &endpoint.base_url)?;
-            Ok(Box::new(custom::CustomAsr::new(endpoint, key)?))
+            Ok(Box::new(custom::CustomAsr::new(endpoint, key, language)?))
         }
     }
 }
@@ -43,7 +49,7 @@ pub fn build_asr(config: &AsrConfig, models_dir: &Path) -> anyhow::Result<Box<dy
 mod tests {
     //! `real_models_pipeline` is `#[ignore]`: it downloads models and needs wav files.
     //! Run: `MORAGO_TEST_WAVS=<dir> cargo test real_models_pipeline -- --ignored --nocapture`
-    //! Optional: `MORAGO_TEST_MODELS=<dir>` (model cache), `MORAGO_TEST_ASR=<id>` (default whisper-base).
+    //! Optional: `MORAGO_TEST_MODELS=<dir>` (model cache), `MORAGO_TEST_ASR=<id>` (default sense-voice-small).
     //! Wav files in `<dir>` (16 kHz mono): en0, en1, sv_ko, sv_ja, sv_zh, sv_en, sv_yue.
     use super::*;
     use crate::models;
@@ -105,13 +111,15 @@ mod tests {
         let models_dir = std::env::var("MORAGO_TEST_MODELS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("morago-test-models"));
-        let asr_id = std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| "whisper-base".into());
+        let asr_id =
+            std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| models::SENSE_VOICE_ID.into());
         ensure_model(&models_dir, &asr_id);
         let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
         let mut asr = build_asr(
             &AsrConfig::Local {
                 model_id: asr_id.clone(),
             },
+            None,
             &models_dir,
         )
         .unwrap();
@@ -139,12 +147,19 @@ mod tests {
                 "[{:>6}-{:>6} ms] {} lang={:?} {}",
                 seg.start_ms, seg.end_ms, who, t.language, t.text
             );
+            assert!(!t.text.trim().is_empty(), "no text at {} ms", seg.start_ms);
             langs.push(t.language.clone().unwrap_or_default());
             speakers.insert(who);
         }
         println!("ASR+diarize time: {:?}", started.elapsed());
         assert!(segs.len() >= order.len(), "VAD found too few segments");
-        for want in ["en", "ko", "ja", "zh"] {
+        // Qwen3-ASR gives no language; Latin and Han-only text then stay unknown.
+        let want_langs: &[&str] = if asr_id == models::QWEN3_ASR_ID {
+            &["ko", "ja"]
+        } else {
+            &["en", "ko", "ja", "zh"]
+        };
+        for &want in want_langs {
             assert!(
                 langs.iter().any(|l| l == want),
                 "language {want} not detected: {langs:?}"
