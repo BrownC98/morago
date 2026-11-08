@@ -6989,6 +6989,10 @@ int whisper_full_with_state(
         }
     }
 
+    // morago patch: the window that language detection encoded (mel offset, audio ctx).
+    int detect_seek = -1;
+    int detect_audio_ctx = 0;
+
     // auto-detect language if not specified
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
@@ -7007,6 +7011,8 @@ int whisper_full_with_state(
         }
         state->lang_id = lang_id;
         params.language = whisper_lang_str(lang_id);
+        detect_seek = 0;
+        detect_audio_ctx = state->exp_n_audio_ctx;
 
         WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[whisper_lang_id(params.language)]);
         if (params.detect_language) {
@@ -7212,7 +7218,10 @@ int whisper_full_with_state(
         }
 
         // encode audio features starting at offset seek
-        if (!whisper_encode_internal(*ctx, *state, seek, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
+        // morago patch: skip the encoder if language detection already encoded this window.
+        const bool encoded = seek == detect_seek && state->exp_n_audio_ctx == detect_audio_ctx;
+        detect_seek = -1;
+        if (!encoded && !whisper_encode_internal(*ctx, *state, seek, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
             WHISPER_LOG_ERROR("%s: failed to encode\n", __func__);
             return -6;
         }
