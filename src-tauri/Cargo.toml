@@ -1,0 +1,72 @@
+[package]
+name = "morago"
+version = "0.1.0"
+description = "Meeting minutes with live translated subtitles"
+authors = ["morago"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "morago_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0.104"
+thiserror = "2.0.21"
+log = "0.4.35"
+env_logger = "0.11.11"
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.29.1", features = ["v4", "serde"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls", "http2", "system-proxy"] }
+crossbeam-channel = "0.5.17"
+tauri-plugin-dialog = "2"
+cpal = "0.18"
+rubato = "5"
+keyring-core = "1.0.1"
+zeroize = "1.9.1"
+tempfile = "3.27.0"
+sherpa-onnx = "2.0.1"
+sherpa-onnx-sys = "=2.0.1"
+# No default features: no OpenMP runtime (vcomp) to ship on Windows, no CUDA.
+llama-cpp-2 = { version = "0.1.161", default-features = false }
+sha2 = "0.11"
+
+# OS credential stores for API keys (secrets.rs). Linux is for development only.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { version = "1.1.0", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+# Metal GPU offload on macOS only; Windows builds stay CPU (no CUDA in CI).
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["metal"] }
+# System audio on macOS (src/audio/macos_tap.rs). Same versions and features as cpal's.
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "AudioHardwareDeprecated", "HostTime", "objc2", "objc2-foundation"] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = "0.3.1"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSValue"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-keyutils-keyring-store = "1.0.0"
+
+[dev-dependencies]
+hound = "3"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

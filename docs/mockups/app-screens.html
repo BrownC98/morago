@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="ko" style="color-scheme: light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M78 회의 통역 앱 화면 목업</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root {
+  --bg: light-dark(oklch(97% 0 0), oklch(20.5% 0 0));
+  --panel: light-dark(oklch(98.5% 0 0), oklch(23.5% 0 0));
+  --surface: light-dark(oklch(100% 0 0), oklch(26.9% 0 0));
+  --surface-hover: light-dark(oklch(93.7% 0 0), oklch(32.9% 0 0));
+  --line: light-dark(oklch(92.2% 0 0), oklch(33% 0 0));
+  --line-strong: light-dark(oklch(87% 0 0), oklch(40% 0 0));
+  --ink: light-dark(oklch(20.5% 0 0), oklch(98.5% 0 0));
+  --ink-2: light-dark(oklch(37.1% 0 0), oklch(80% 0 0));
+  --ink-3: light-dark(oklch(50% 0 0), oklch(70.9% 0 0));
+  --accent: light-dark(oklch(20.5% 0 0), oklch(92.2% 0 0));
+  --accent-wash: light-dark(oklch(20.5% 0 0 / 0.07), oklch(92.2% 0 0 / 0.12));
+  --warn: light-dark(oklch(54% 0.12 87), oklch(80% 0.15 87));
+  --err: light-dark(oklch(55% 0.2 27), oklch(70% 0.17 25));
+  --font: 'Pretendard', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; }
+html { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
+button { font: inherit; color: inherit; }
+.doc { width: 1440px; margin: 0 auto; padding: 32px 40px 64px; display: grid; gap: 28px; }
+.who { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); }
+.who b { color: var(--ink); }
+h1 { font-size: 18px; }
+h2 { font-size: 15px; display: flex; gap: 8px; align-items: baseline; }
+h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
+.lead { color: var(--ink-2); max-width: 900px; }
+.fig { display: grid; gap: 10px; }
+.note { font-size: 13px; color: var(--ink-2); max-width: 880px; }
+.note li { margin-left: 18px; }
+.decision { display: grid; gap: 6px; max-width: 880px; padding: 10px 12px; border: 1.5px solid var(--warn); border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 6%, var(--surface)); }
+.fig + .decision { margin-top: -16px; }
+.decision > h3 { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.did { flex: none; display: inline-flex; align-items: center; height: 26px; padding: 0 8px; border: 1px solid color-mix(in oklch, var(--warn) 55%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--warn) 10%, var(--surface)); color: var(--ink); font: 700 15px/24px var(--mono); }
+.opts { display: grid; gap: 6px; }
+.opt { display: flex; align-items: baseline; gap: 6px; min-height: 26px; padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); font-size: 13px; line-height: 1.4; }
+.opt .key { font: 600 11px var(--mono); color: var(--ink-3); }
+.opt[data-recommended] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); }
+.opt .mark { margin-left: 6px; color: var(--warn); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.opt .sub { display: block; color: var(--ink-2); font-size: 12px; }
+.decision .why { font-size: 13px; color: var(--ink-2); }
+.decision .why li { margin-left: 18px; }
+.theme-toggle { position: fixed; top: 16px; right: 16px; height: 30px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 13px; cursor: pointer; }
+.flow { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); flex-wrap: wrap; }
+.flow b { color: var(--ink); font-weight: 600; padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
+
+/* callouts */
+.fig { position: relative; }
+.co { position: absolute; z-index: 63; max-width: 250px; display: flex; gap: 6px; align-items: flex-start; background: #fff; color: #171B22; border: 1.5px solid #D14343; border-radius: 6px; padding: 4px 8px 4px 5px; font: 12px/1.45 var(--font); box-shadow: 0 2px 8px rgb(0 0 0 / .18); }
+.co .dref { flex: none; height: 22px; margin-top: 1px; padding: 0 5px; border: 1px solid #C08A1E; border-radius: 4px; background: #FDF3DC; color: #171B22; font: 700 12px/20px var(--mono); font-style: normal; }
+.decision > .for { font-size: 13px; font-weight: 600; }
+.co b { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #D14343; color: #fff; font-size: 14px; display: grid; place-items: center; margin-top: 1px; }
+.shotwrap { position: relative; justify-self: start; padding: 16px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; }
+.doc { width: auto; max-width: 1440px; }
+.doc > *, .fig > * { min-width: 0; }
+.flow { width: auto; max-width: 1200px; }
+.fig > .xlwin { margin-bottom: 8px; }
+.lead-svg { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 61; }
+.ov-box { position: absolute; box-sizing: border-box; border: 2px solid #D14343; border-radius: 6px; pointer-events: none; z-index: 60; }
+.ov-box.new { border-style: dashed; }
+.ov-badge { position: absolute; z-index: 62; width: 28px; height: 28px; border-radius: 50%; background: #D14343; color: #fff; font: 700 15px/28px var(--font); text-align: center; pointer-events: none; }
+.lead-svg polyline { fill: none; stroke: #D14343; stroke-width: 1.5; }
+.lead-svg circle { fill: #D14343; }
+.shotwrap .mk { position: absolute; }
+.card, .fld { justify-items: start; }
+.card > div, .fld > .inp, .fld > .row2 { justify-self: stretch; }
+.card .fld.wide { width: 600px; }
+
+/* ===== product screen (app tokens) ===== */
+.page {
+  --a-bg: oklch(98.6% 0.004 255);
+  --a-side: oklch(96.4% 0.006 255);
+  --a-surface: oklch(100% 0 0);
+  --a-line: oklch(91% 0.008 255);
+  --a-line-2: oklch(85% 0.01 255);
+  --a-ink: oklch(21% 0.02 258);
+  --a-ink-2: oklch(40% 0.02 258);
+  --a-ink-3: oklch(50% 0.018 258);
+  --a-accent: oklch(50% 0.19 258);
+  --a-accent-ink: oklch(100% 0 0);
+  --a-accent-wash: oklch(95% 0.03 258);
+  --a-rec: oklch(53% 0.2 27);
+  --a-ok: oklch(52% 0.13 150);
+  --a-warn-wash: oklch(96% 0.05 90);
+  --a-warn-ink: oklch(42% 0.09 80);
+  width: 1360px; height: 820px; display: grid; grid-template-rows: 52px minmax(0, 1fr) 34px;
+  background: var(--a-bg); color: var(--a-ink); border: 1px solid var(--a-line-2); border-radius: 10px; overflow: hidden;
+  font: 14px/1.5 var(--font); color-scheme: light;
+}
+.page.tall { height: 1000px; }
+.top { display: flex; align-items: center; gap: 20px; padding: 0 16px; background: var(--a-surface); border-bottom: 1px solid var(--a-line); }
+.brand { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.brand svg { width: 20px; height: 20px; }
+.tabs { display: flex; gap: 2px; }
+.tab { height: 32px; padding: 0 14px; border: 0; border-radius: 6px; background: none; color: var(--a-ink-2); font-size: 14px; font-weight: 500; cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--a-accent-wash); color: var(--a-accent); font-weight: 600; }
+.sp { flex: 1; }
+.ab { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--a-line-2); background: var(--a-surface); color: var(--a-ink); font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.ab svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ab.primary { background: var(--a-accent); border-color: var(--a-accent); color: var(--a-accent-ink); }
+.ab.stop { background: var(--a-rec); border-color: var(--a-rec); color: #fff; }
+.ab.ghost { border-color: transparent; background: none; color: var(--a-ink-2); }
+.ab.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.sel { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 1px solid var(--a-line-2); border-radius: 6px; background: var(--a-surface); font-size: 13px; }
+.sel .lab { color: var(--a-ink-3); }
+.sel svg { width: 14px; height: 14px; stroke: var(--a-ink-3); fill: none; stroke-width: 2; }
+.tog { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--a-ink-2); }
+.sw { width: 30px; height: 18px; border-radius: 9px; background: var(--a-accent); position: relative; flex: none; }
+.sw::after { content: ""; position: absolute; top: 2px; right: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.sw.off { background: var(--a-line-2); }
+.sw.off::after { right: auto; left: 2px; }
+.lvl { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+.lvl i { width: 3px; background: var(--a-ok); border-radius: 1px; }
+.lvl i.z { background: var(--a-line-2); }
+.timer { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 6px; }
+.timer::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--a-rec); }
+
+.bar { display: flex; align-items: center; gap: 18px; padding: 0 16px; background: var(--a-side); border-top: 1px solid var(--a-line); font-size: 12px; color: var(--a-ink-2); }
+.bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok); display: inline-block; margin-right: 6px; }
+
+.page.dark {
+  --a-bg: oklch(19% 0.012 258);
+  --a-side: oklch(22% 0.014 258);
+  --a-surface: oklch(24.5% 0.015 258);
+  --a-line: oklch(31% 0.015 258);
+  --a-line-2: oklch(38% 0.018 258);
+  --a-ink: oklch(95% 0.006 258);
+  --a-ink-2: oklch(82% 0.01 258);
+  --a-ink-3: oklch(72% 0.012 258);
+  --a-accent: oklch(72% 0.15 258);
+  --a-accent-ink: oklch(18% 0.02 258);
+  --a-accent-wash: oklch(32% 0.06 258);
+  --a-rec: oklch(64% 0.19 27);
+  --a-ok: oklch(72% 0.14 150);
+  --a-warn-wash: oklch(30% 0.05 90);
+  --a-warn-ink: oklch(86% 0.1 90);
+  color-scheme: dark;
+}
+.page.dark .s1 { --c: oklch(70% 0.14 258); } .page.dark .s2 { --c: oklch(74% 0.13 160); } .page.dark .s3 { --c: oklch(76% 0.13 55); } .page.dark .me { --c: oklch(72% 0.02 258); }
+.page.dark .ab.stop { color: oklch(15% 0.02 27); }
+
+/* live */
+.live { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.ctl { display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: var(--a-surface); border-bottom: 1px solid var(--a-line); }
+.feed { overflow: hidden; padding: 16px 24px 0 24px; display: grid; gap: 4px; align-content: start; width: 1010px; }
+.utt { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 16px; padding: 10px 12px; border-radius: 8px; }
+.utt:hover { background: var(--a-surface); }
+.utt.now { background: var(--a-surface); box-shadow: 0 1px 3px oklch(20% 0.02 258 / .08); }
+.who-c { display: grid; gap: 2px; align-content: start; }
+.spk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.spk::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+.src { font-size: 12px; color: var(--a-ink-3); }
+.tm { font: 12px var(--mono); color: var(--a-ink-3); font-variant-numeric: tabular-nums; }
+.txt { display: grid; gap: 3px; }
+.orig { color: var(--a-ink-2); font-size: 14px; }
+.orig .lg { font: 600 11px var(--mono); color: var(--a-ink-3); border: 1px solid var(--a-line-2); border-radius: 4px; padding: 0 4px; margin-right: 6px; }
+.tr { font-size: 17px; font-weight: 500; line-height: 1.45; }
+.tr.wait { color: var(--a-ink-3); font-size: 14px; font-weight: 400; }
+.tr.same { color: var(--a-ink-3); font-size: 13px; font-weight: 400; }
+.s1 { --c: oklch(55% 0.15 258); } .s2 { --c: oklch(60% 0.14 160); } .s3 { --c: oklch(62% 0.15 55); } .me { --c: oklch(55% 0.02 258); }
+
+/* records */
+.rec { display: grid; grid-template-columns: 330px minmax(0, 1fr); min-height: 0; }
+.list { background: var(--a-side); border-right: 1px solid var(--a-line); padding: 12px; display: grid; gap: 4px; align-content: start; }
+.search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--a-line-2); border-radius: 6px; background: var(--a-surface); color: var(--a-ink-3); font-size: 13px; margin-bottom: 8px; }
+.search svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+.it { display: grid; gap: 2px; padding: 10px 12px; border-radius: 8px; }
+.it[aria-current="true"] { background: var(--a-surface); box-shadow: 0 1px 3px oklch(20% 0.02 258 / .08); }
+.it .t { font-weight: 600; font-size: 14px; }
+.it .m { font-size: 12px; color: var(--a-ink-3); }
+.det { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.dhead { display: flex; align-items: center; gap: 12px; padding: 14px 24px; background: var(--a-surface); border-bottom: 1px solid var(--a-line); }
+.dhead h3 { font-size: 17px; }
+.dhead .m { font-size: 12px; color: var(--a-ink-3); }
+.exp { display: inline-flex; gap: 6px; align-items: center; }
+
+/* settings */
+.set { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
+.snav { background: var(--a-side); border-right: 1px solid var(--a-line); padding: 12px; display: grid; gap: 2px; align-content: start; }
+.snav a { display: block; padding: 7px 12px; border-radius: 6px; font-size: 14px; color: var(--a-ink-2); text-decoration: none; }
+.snav a[aria-current="true"] { background: var(--a-surface); color: var(--a-ink); font-weight: 600; }
+.sbody { padding: 20px 28px; display: grid; gap: 20px; align-content: start; width: 900px; overflow: hidden; }
+.grp { display: grid; gap: 10px; }
+.grp > h3 { font-size: 15px; }
+.grp > p { font-size: 13px; color: var(--a-ink-3); }
+.card { background: var(--a-surface); border: 1px solid var(--a-line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 12px; }
+.radio { display: flex; gap: 8px; }
+.ro { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--a-line-2); border-radius: 6px; font-size: 13px; background: var(--a-surface); }
+.ro::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--a-line-2); box-sizing: border-box; }
+.ro[aria-checked="true"] { border-color: var(--a-accent); background: var(--a-accent-wash); color: var(--a-accent); font-weight: 600; }
+.ro[aria-checked="true"]::before { border: 4px solid var(--a-accent); }
+.mrow { display: grid; grid-template-columns: 160px 120px minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--a-line); }
+.mrow:first-of-type { border-top: 0; }
+.mrow .n { font-weight: 600; }
+.mrow .s { color: var(--a-ink-3); font-variant-numeric: tabular-nums; }
+.ok { color: var(--a-ok); font-weight: 600; font-size: 12px; }
+.prog { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
+.prog .pb { height: 6px; border-radius: 3px; background: var(--a-line); overflow: hidden; }
+.prog .pb i { display: block; height: 100%; background: var(--a-accent); }
+.prog span { font: 12px var(--mono); color: var(--a-ink-3); text-align: right; }
+.fld { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px 12px; font-size: 13px; }
+.fld label { color: var(--a-ink-2); }
+.inp { height: 32px; padding: 0 10px; border: 1px solid var(--a-line-2); border-radius: 6px; background: var(--a-surface); display: flex; align-items: center; font-size: 13px; }
+.inp.mono { font-family: var(--mono); font-size: 12px; }
+.fhint { font-size: 12px; color: var(--a-ink-3); }
+.row2 { display: flex; gap: 8px; align-items: center; }
+.notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-radius: 6px; background: var(--a-warn-wash); color: var(--a-warn-ink); font-size: 13px; }
+</style>
+</head>
+<body data-ui=".ab, .sel, .tab, .ro, .inp, .sw, .search">
+<main class="doc">
+  <div class="who"><span class="doc-id">문서 ID: <b>M78</b></span><span>응답할 곳: <b>코디 · 코디 회의번역앱</b></span><span>연 담당: <b>코디 · 코디 회의번역앱</b></span><span>v2 · 2026-11-08 (v1 승인, 다크 테마 기록용 추가)</span></div>
+  <h1>회의 통역 앱: 실시간 자막, 기록, 설정 화면</h1>
+  <p class="lead">사람의 요구: Windows와 macOS에서 마이크와 시스템 소리를 함께 받아, 외국어 발화를 사용자가 고른 언어로 실시간 번역해 화면에 보입니다. 화자와 발화 시각을 기록하고, 원문과 번역을 저장합니다. 음성 인식과 번역은 로컬 모델과 사용자 지정 서비스(OpenAI 호환 주소)를 모두 씁니다.</p>
+  <div class="flow"><b>① 회의</b>에서 [시작] → 발화마다 화자·시각·원문·번역이 쌓임 → [중지]하면 자동 저장 → <b>② 기록</b>에서 다시 보기·내보내기 → 모델과 언어는 <b>③ 설정</b>에서 정함</div>
+
+  <div class="fig">
+    <h2>① 회의 (진행 중)</h2>
+    <div class="page">
+      <div class="top">
+        <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
+        <span class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">회의</button><button class="tab" role="tab">기록</button><button class="tab" role="tab">설정</button></span>
+        <span class="sp"></span>
+        <span class="timer">00:12:47</span>
+      </div>
+      <div class="live">
+        <div class="ctl">
+          <span class="mk" data-n="1"><span class="row2" style="gap:16px"><span class="tog"><span class="sw"></span>마이크 <span class="lvl"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i class="z" style="height:14px"></i></span></span><span class="tog"><span class="sw"></span>시스템 소리 <span class="lvl"><i style="height:7px"></i><i style="height:11px"></i><i style="height:14px"></i><i style="height:10px"></i></span></span></span></span>
+          <span class="sp"></span>
+          <span class="mk" data-n="2"><span class="sel"><span class="lab">번역할 언어</span>한국어<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></span>
+          <span class="mk" data-n="3"><button class="ab stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>중지하고 저장</button></span>
+        </div>
+        <div class="feed">
+          <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:11:58–00:12:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap. We moved the launch to the second week of December.</p><p class="tr">3분기 로드맵부터 시작하죠. 출시를 12월 둘째 주로 옮겼습니다.</p></div></div>
+          <div class="utt"><div class="who-c"><span class="spk me">화자 2</span><span class="src">마이크</span><span class="tm">00:12:07–00:12:11</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>그럼 베타 테스트 일정도 같이 밀리나요?</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
+          <div class="mk" data-n="4"><div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:12:13–00:12:24</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>ベータは予定通り11月末に始めます。フィードバックは二週間で集めます。</p><p class="tr">베타는 예정대로 11월 말에 시작합니다. 피드백은 2주 동안 모읍니다.</p></div></div></div>
+          <div class="mk" data-n="5"><div class="utt now"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:12:26–00:12:33</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Good. Then marketing needs the final screenshots by November 20th.</p><p class="tr wait">번역하는 중…</p></div></div></div>
+        </div>
+      </div>
+      <div class="bar"><span class="mk" data-n="6"><span><span class="dot"></span>음성 인식: 로컬 Whisper small</span>　<span><span class="dot"></span>번역: 로컬 Qwen2.5 3B</span></span><span class="sp"></span><span>자동 저장: 발화 4개</span></div>
+    </div>
+    <div class="calls">
+      <div><b>1</b><span>들을 소리를 켜고 끕니다. 시스템 소리는 화상회의 상대의 목소리입니다.</span></div>
+      <div><b>2</b><span>번역 결과의 언어입니다. 회의 중에도 바꿀 수 있고, 바꾼 뒤의 발화부터 적용합니다.</span></div>
+      <div><b>3</b><span>시작 전에는 파란 [회의 시작] 버튼입니다. 중지하면 회의가 ② 기록에 저장됩니다.</span></div>
+      <div><b>4</b><span>발화 한 개: 화자, 들어온 곳, 시작–끝 시각, 원문(언어 표시), 그 아래 큰 글자로 번역.</span></div>
+      <div><b>5</b><span>원문이 먼저 보이고, 번역이 끝나면 같은 줄에 번역이 채워집니다. 새 발화가 오면 아래로 자동 스크롤합니다.</span></div>
+      <div><b>6</b><span>지금 쓰는 음성 인식과 번역. 오류는 빨간 점으로 보입니다.</span></div>
+    </div>
+  </div>
+
+  <section class="decision" id="D1" data-for="4">
+    <h3><span class="did">D1</span>발화 한 줄에서 원문과 번역을 어떻게 놓는가</h3>
+    <div class="opts">
+      <div class="opt" data-recommended><span class="key">A</span><span class="label">원문 위, 번역 아래(그림처럼)<span class="mark">권장</span><span class="sub">한 줄씩 위에서 아래로 읽음 · 긴 문장도 넓게 보임 · 바꾸기 쉬움</span></span></div>
+      <div class="opt"><span class="key">B</span><span class="label">원문 왼쪽 칸, 번역 오른쪽 칸<span class="sub">두 언어를 나란히 비교함 · 칸이 좁아 긴 문장은 여러 줄이 됨</span></span></div>
+    </div>
+    <ul class="why"><li>번역이 주로 읽는 글이므로 큰 글자로 넓게 둡니다.</li><li>창을 좁게 해서 다른 창 옆에 둘 때도 읽힙니다.</li></ul>
+  </section>
+
+  <section class="decision" id="D2" data-for="4 1">
+    <h3><span class="did">D2</span>마이크로 들어온 목소리의 화자를 어떻게 적는가</h3>
+    <div class="opts">
+      <div class="opt" data-recommended><span class="key">A</span><span class="label">마이크도 목소리로 화자를 나눔(화자 1, 2, …)<span class="mark">권장</span><span class="sub">회의실에서 노트북 한 대로 여러 사람이 말해도 나뉨 · 처음 몇 마디는 화자가 섞일 수 있음</span></span></div>
+      <div class="opt"><span class="key">B</span><span class="label">마이크는 늘 「나」로 적음<span class="sub">혼자 헤드셋을 쓸 때 정확함 · 회의실 여러 사람은 모두 「나」가 됨</span></span></div>
+    </div>
+    <ul class="why"><li>시스템 소리는 두 방법 모두 목소리로 화자를 나눕니다.</li><li>기록에서 「화자 2」를 「나」처럼 다른 이름으로 바꿀 수 있게 합니다(② 기록).</li></ul>
+  </section>
+
+  <div class="fig">
+    <h2>② 기록</h2>
+    <div class="page">
+      <div class="top">
+        <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
+        <span class="tabs" role="tablist"><button class="tab" role="tab">회의</button><button class="tab" role="tab" aria-selected="true">기록</button><button class="tab" role="tab">설정</button></span>
+        <span class="sp"></span>
+      </div>
+      <div class="rec">
+        <div class="list">
+          <span class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>회의 이름이나 내용으로 찾기</span>
+          <span class="mk" data-n="7"><span class="it" aria-current="true" style="display:grid"><span class="t">3분기 로드맵 회의</span><span class="m">2026-11-08 14:02 · 48분 · 화자 3명 · 발화 212개</span></span></span>
+          <span class="it"><span class="t">파트너사 주간 점검</span><span class="m">2026-11-06 10:30 · 31분 · 화자 2명 · 발화 140개</span></span>
+          <span class="it"><span class="t">회의 2026-11-04 16:15</span><span class="m">2026-11-04 16:15 · 12분 · 화자 2명 · 발화 37개</span></span>
+        </div>
+        <div class="det">
+          <div class="dhead">
+            <div><h3>3분기 로드맵 회의</h3><span class="m">2026-11-08 14:02–14:50 · 번역 언어 한국어 · 로컬 Whisper small · 로컬 Qwen2.5 3B</span></div>
+            <span class="sp"></span>
+            <button class="ab ghost sm">이름 바꾸기</button>
+            <span class="mk" data-n="8"><button class="ab sm">화자 이름 바꾸기</button></span>
+            <span class="mk" data-n="9"><span class="exp"><button class="ab sm"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Markdown</button><button class="ab sm">SRT 자막</button><button class="ab sm">JSON</button></span></span>
+            <button class="ab ghost sm">삭제</button>
+          </div>
+          <div class="feed" style="width:auto">
+            <div class="utt"><div class="who-c"><span class="spk s1">민지 (화자 1)</span><span class="src">시스템 소리</span><span class="tm">00:00:04–00:00:11</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Thanks everyone for joining. Let's keep this to under fifty minutes.</p><p class="tr">참석해 주셔서 고맙습니다. 50분 안에 끝내겠습니다.</p></div></div>
+            <div class="utt"><div class="who-c"><span class="spk me">나 (화자 2)</span><span class="src">마이크</span><span class="tm">00:00:12–00:00:15</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>네, 안건은 세 개입니다.</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
+            <div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:00:17–00:00:26</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>最初に予算の話をしてもいいですか。</p><p class="tr">먼저 예산 이야기를 해도 될까요?</p></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="bar"><span>저장 위치: 문서/morago/회의 기록</span><span class="sp"></span><span>회의 3개</span></div>
+    </div>
+    <div class="calls">
+      <div><b>7</b><span>지난 회의 목록입니다. 최근 회의가 위에 옵니다. 이름을 정하지 않으면 시작 시각이 이름이 됩니다.</span></div>
+      <div><b>8</b><span>「화자 1」 같은 이름을 사람 이름으로 바꿉니다. 이 회의의 모든 발화와 내보낸 파일에 적용됩니다.</span></div>
+      <div><b>9</b><span>원문, 번역, 화자, 시각을 파일로 저장합니다. SRT는 영상 자막 파일입니다.</span></div>
+    </div>
+  </div>
+
+  <div class="fig">
+    <h2>③ 설정</h2>
+    <div class="page tall">
+      <div class="top">
+        <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
+        <span class="tabs" role="tablist"><button class="tab" role="tab">회의</button><button class="tab" role="tab">기록</button><button class="tab" role="tab" aria-selected="true">설정</button></span>
+        <span class="sp"></span>
+      </div>
+      <div class="set">
+        <nav class="snav"><a href="#" aria-current="true">언어</a><a href="#">음성 인식</a><a href="#">번역</a><a href="#">소리 입력</a><a href="#">저장</a></nav>
+        <div class="sbody">
+          <div class="grp"><h3>언어</h3>
+            <div class="card"><div class="fld"><label>번역할 언어</label><span class="mk" data-n="10"><span class="sel" style="width:260px"><span>한국어</span><span class="sp"></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></span></div></div>
+          </div>
+          <div class="grp"><h3>음성 인식</h3>
+            <div class="card">
+              <span class="mk" data-n="11"><span class="radio"><span class="ro" aria-checked="true">이 컴퓨터(로컬 Whisper)</span><span class="ro">사용자 지정 서비스</span></span></span>
+              <div>
+                <div class="mrow"><span class="n">Whisper base</span><span class="s">150 MB</span><span class="fhint">빠름, 정확도 보통</span><span class="ok">내려받음</span></div>
+                <div class="mrow"><span class="n">Whisper small</span><span class="s">480 MB</span><span class="fhint">대부분의 노트북에 맞음</span><span class="ok">사용 중</span></div>
+                <div class="mrow"><span class="n">Whisper medium</span><span class="s">1.5 GB</span><span class="prog"><span class="pb"><i style="width:42%"></i></span><span>42%</span></span><button class="ab ghost sm">취소</button></div>
+              </div>
+              <div class="tog"><span class="sw"></span>목소리로 화자 나누기</div>
+            </div>
+          </div>
+          <div class="grp"><h3>번역</h3>
+            <div class="card">
+              <span class="radio"><span class="ro">이 컴퓨터(로컬 언어 모델)</span><span class="ro" aria-checked="true">사용자 지정 서비스</span></span>
+              <span class="mk" data-n="12"><span class="fld wide"><label>서비스 주소</label><span class="inp mono">https://api.openai.com/v1</span><label>API 키</label><span class="row2"><span class="inp mono" style="flex:1">••••••••••••••••3f9a</span><button class="ab sm">바꾸기</button><button class="ab ghost sm">삭제</button><button class="ab sm">연결 시험</button></span><label>모델</label><span class="inp mono">gpt-4o-mini</span></span></span>
+              <span class="fhint">OpenAI 호환 주소를 씁니다(Ollama, LM Studio, vLLM도 가능). API 키는 Windows 자격 증명 관리자, macOS 키체인에만 저장하고 설정 파일, 기록, 내보낸 파일에는 넣지 않습니다.</span>
+            </div>
+          </div>
+          <div class="grp"><h3>소리 입력</h3>
+            <div class="card">
+              <div class="fld"><label>마이크</label><span class="sel" style="width:340px"><span>MacBook Pro 마이크</span><span class="sp"></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></div>
+              <span class="mk" data-n="13"><span class="notice">시스템 소리는 macOS 14.6 이상에서 받을 수 있습니다. 처음 시작할 때 macOS가 「시스템 오디오 녹음」 권한을 묻습니다.</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bar"><span>바꾼 설정은 바로 저장됩니다</span></div>
+    </div>
+    <div class="calls">
+      <div><b>10</b><span>① 회의의 번역 언어와 같은 설정입니다. 어느 쪽에서 바꿔도 같습니다.</span></div>
+      <div><b>11</b><span>이 컴퓨터에서 인식하면 소리가 밖으로 나가지 않습니다. 모델은 한 번 내려받습니다.</span></div>
+      <div><b>12</b><span>사용자 지정 서비스: 주소, 키, 모델 이름을 넣습니다. 키는 끝 4자리만 보이고 [바꾸기]·[삭제]로 고칩니다. 음성 인식에도 같은 칸이 있습니다.</span></div>
+      <div><b>13</b><span>운영체제의 제한을 그 자리에서 알립니다. Windows는 10 이상에서 시스템 소리를 받습니다.</span></div>
+    </div>
+  </div>
+  <div class="fig">
+    <h2>④ 회의, 다크 테마 <span class="tag">설정 › 화면 › 테마: 라이트 / 다크 / 시스템</span></h2>
+    <div class="page dark">
+      <div class="top">
+        <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
+        <span class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">회의</button><button class="tab" role="tab">기록</button><button class="tab" role="tab">설정</button></span>
+        <span class="sp"></span>
+        <span class="timer">00:12:47</span>
+      </div>
+      <div class="live">
+        <div class="ctl">
+          <span class="nomk"><span class="row2" style="gap:16px"><span class="tog"><span class="sw"></span>마이크 <span class="lvl"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i class="z" style="height:14px"></i></span></span><span class="tog"><span class="sw"></span>시스템 소리 <span class="lvl"><i style="height:7px"></i><i style="height:11px"></i><i style="height:14px"></i><i style="height:10px"></i></span></span></span></span>
+          <span class="sp"></span>
+          <span class="nomk"><span class="sel"><span class="lab">번역할 언어</span>한국어<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></span>
+          <span class="nomk"><button class="ab stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>중지하고 저장</button></span>
+        </div>
+        <div class="feed">
+          <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:11:58–00:12:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap. We moved the launch to the second week of December.</p><p class="tr">3분기 로드맵부터 시작하죠. 출시를 12월 둘째 주로 옮겼습니다.</p></div></div>
+          <div class="utt"><div class="who-c"><span class="spk me">화자 2</span><span class="src">마이크</span><span class="tm">00:12:07–00:12:11</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>그럼 베타 테스트 일정도 같이 밀리나요?</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
+          <div class="nomk"><div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:12:13–00:12:24</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>ベータは予定通り11月末に始めます。フィードバックは二週間で集めます。</p><p class="tr">베타는 예정대로 11월 말에 시작합니다. 피드백은 2주 동안 모읍니다.</p></div></div></div>
+          <div class="nomk"><div class="utt now"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:12:26–00:12:33</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Good. Then marketing needs the final screenshots by November 20th.</p><p class="tr wait">번역하는 중…</p></div></div></div>
+        </div>
+      </div>
+      <div class="bar"><span class="nomk"><span><span class="dot"></span>음성 인식: 로컬 Whisper small</span>　<span><span class="dot"></span>번역: 로컬 Qwen2.5 3B</span></span><span class="sp"></span><span>자동 저장: 발화 4개</span></div>
+    </div>
+  </div>
+</main>
+<button type="button" class="theme-toggle" onclick="const h=document.documentElement;const dark=h.style.colorScheme==='dark';h.style.colorScheme=dark?'light':'dark';this.textContent=dark?'다크로 보기':'라이트로 보기';">다크로 보기</button>
+<script>
+(() => {
+  const GUT = 290;
+  const fit = fig => {
+    const room = fig.clientWidth - GUT;
+    for (const e of fig.querySelectorAll('.page, .shotwrap')) e.style.zoom = Math.min(0.8, room / (e.matches('.shotwrap') ? 1394 : 1360));
+    for (const e of fig.querySelectorAll('.xlwin')) { e.style.zoom = 1; e.style.zoom = Math.min(1, room / e.offsetWidth); }
+  };
+  const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+  const inside = (a, b) => a.l >= b.l && a.r <= b.r && a.t >= b.t && a.b <= b.b;
+  const grow = (r, d) => ({ l: r.l - d, t: r.t - d, r: r.r + d, b: r.b + d });
+  const cross = (x1, y1, x2, y2, r) => {
+    let t0 = 0, t1 = 1; const dx = x2 - x1, dy = y2 - y1;
+    for (const [p, q] of [[-dx, x1 - r.l], [dx, r.r - x1], [-dy, y1 - r.t], [dy, r.b - y1]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p; if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  };
+  const UI = ['img, svg, button, input, select, textarea', document.body.dataset.ui].filter(Boolean).join(', ');
+  const uiRects = (fig, rel) => {
+    const out = [];
+    for (const r of [...fig.children].filter(e => !e.matches('.co, .lead-svg, .calls'))) {
+      const w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT);
+      for (let n; (n = w.nextNode());) {
+        if (!n.textContent.trim()) continue;
+        const g = document.createRange(); g.selectNodeContents(n);
+        for (const q of g.getClientRects()) if (q.width && q.height) out.push(Object.assign(rel(q), { txt: 1 }));
+      }
+      for (const e of r.querySelectorAll(UI)) out.push(rel(e.getBoundingClientRect()));
+    }
+    return out;
+  };
+  const refs = new Map();
+  const name = fig => [...fig.querySelector('h2')?.childNodes ?? []].filter(c => !c.classList?.contains('tag')).map(c => c.textContent).join('').trim();
+  for (const d of document.querySelectorAll('.decision[data-for]')) {
+    const groups = new Map();
+    for (const n of d.dataset.for.match(/\d+/g) ?? []) {
+      refs.set(n, [...(refs.get(n) ?? []), d.id]);
+      const fig = document.querySelector(`.mk[data-n="${n}"]`)?.closest('.fig'); if (!fig) continue;
+      groups.set(fig, [...(groups.get(fig) ?? []), n]);
+    }
+    const line = document.createElement('p'); line.className = 'for';
+    line.textContent = '대상: ' + [...groups].map(([fig, ns]) => `${name(fig)} · ${ns.join(', ')}번`).join(' / ');
+    d.querySelector(':scope > .for')?.remove(); d.querySelector(':scope > h3')?.after(line);
+  }
+  const layout = () => { for (const fig of document.querySelectorAll('.fig')) {
+    const src = fig.querySelector(':scope > .calls'); if (!src) { fit(fig); continue; }
+    fig.style.paddingBottom = ''; const base = parseFloat(getComputedStyle(fig).paddingBottom);
+    if (!place(fig, src)) continue;
+    const pad = x => { fig.style.paddingBottom = base + x + 'px'; return place(fig, src); };
+    let lo = 0, hi = 1200;
+    if (pad(hi)) continue;
+    while (hi - lo > 20) { const mid = Math.round((lo + hi) / 40) * 20; if (pad(mid)) lo = mid; else hi = mid; }
+    pad(hi);
+  } };
+  const place = (fig, src) => {
+    fig.querySelectorAll(':scope > .co, :scope > .lead-svg, :scope > .ov-box, :scope > .ov-badge').forEach(e => e.remove());
+    fit(fig);
+    const texts = new Map([...src.querySelectorAll(':scope > div')].map(d => [d.querySelector(':scope > b')?.textContent.trim(), d.querySelector(':scope > span')?.innerHTML]));
+    src.style.display = 'none';
+    const F = fig.getBoundingClientRect();
+    const rel = r => ({ l: r.left - F.left, t: r.top - F.top, r: r.right - F.left, b: r.bottom - F.top });
+    const marks = [...fig.querySelectorAll('.mk[data-n]')];
+    const clip = (g, e) => { if (!e || !fig.contains(e)) return g; const z = grow(rel(e.getBoundingClientRect()), -1); return { l: Math.max(g.l, z.l), t: Math.max(g.t, z.t), r: Math.min(g.r, z.r), b: Math.min(g.b, z.b) }; };
+    const outl = marks.map(m => { const r = rel(m.getBoundingClientRect()), frame = m.closest('.page, .xlwin, .shotwrap');
+      if (m.matches('td, th')) return clip(grow(r, -1), frame);
+      if (m.matches('.shotwrap .mk')) return r;
+      return clip(clip(grow(r, 5), m.parentElement.closest('td, th')), frame); });
+    const ui = uiRects(fig, rel);
+    const badges = [];
+    marks.forEach((m, i) => {
+      const o = outl[i], bx = document.createElement('div'); bx.className = 'ov-box' + (m.classList.contains('new') ? ' new' : ''); bx.dataset.n = m.dataset.n;
+      Object.assign(bx.style, { left: o.l + 'px', top: o.t + 'px', width: o.r - o.l + 'px', height: o.b - o.t + 'px' }); fig.appendChild(bx);
+      const spots = [[o.l, o.t], [o.r, o.t], [o.l, o.b], [o.r, o.b], [(o.l + o.r) / 2, o.t - 14], [(o.l + o.r) / 2, o.b + 14], [o.l - 14, o.t + 14], [o.r + 14, o.t + 14]].map(([x, y]) => ({ l: x - 14, t: y - 14, r: x + 14, b: y + 14 }));
+      const ocx = (o.l + o.r) / 2, ocy = (o.t + o.b) / 2, cont = u => !u.txt && u.l <= ocx && ocx <= u.r && u.t <= ocy && ocy <= u.b;
+      const area = (a, b) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+      const cost = r => (r.l < 0 || r.t < 0 || r.r > F.width ? 1e9 : 0) + ui.reduce((s, u) => s + (cont(u) ? 0 : area(r, u)), 0) + badges.reduce((s, u) => s + 10 * area(grow(r, 2), u), 0)
+        + outl.reduce((s, u, j) => s + (j !== i && hit(r, u) && !(u.l <= r.l && r.r <= u.r && u.t <= r.t && r.b <= u.b) ? 50 : 0), 0);
+      const sp = spots.reduce((a, r) => (cost(r) < cost(a) ? r : a)); badges.push(sp);
+      const bd = document.createElement('div'); bd.className = 'ov-badge'; bd.dataset.n = bd.textContent = m.dataset.n;
+      Object.assign(bd.style, { left: sp.l + 'px', top: sp.t + 'px' }); fig.appendChild(bd);
+    });
+    const boxes = outl;
+    const frames = [...fig.querySelectorAll('.page, .xlwin, .shotwrap')];
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('class', 'lead-svg');
+    svg.setAttribute('width', F.width); svg.setAttribute('height', F.height); fig.appendChild(svg);
+    const attempt = order => {
+    fig.querySelectorAll(':scope > .co').forEach(e => e.remove()); svg.replaceChildren();
+    const placed = [], segs = [], seen = new Set(), pad = 4; let fails = 0, longest = 0;
+    order.forEach(i => { const m = marks[i];
+      const n = +m.dataset.n; if (seen.has(n) || !texts.get(String(n))) return; seen.add(n);
+      const co = document.createElement('div'); co.className = 'co'; co.dataset.n = n; co.innerHTML = `<b>${n}</b>${(refs.get(String(n)) ?? []).map(k => `<i class="dref">${k}</i>`).join('')}<span>${texts.get(String(n))}</span>`;
+      Object.assign(co.style, { left: '0px', top: '0px', boxSizing: 'border-box' }); fig.appendChild(co);
+      const own = m.closest('.page, .xlwin, .shotwrap');
+      const other = frames.filter(e => e !== own).map(e => rel(e.getBoundingClientRect()));
+      const k = outl[i];
+      const cx = (k.l + k.r) / 2, cy = (k.t + k.b) / 2, holds = o => o.l <= cx && cx <= o.r && o.t <= cy && cy <= o.b;
+      const lineObs = ui.filter(o => !inside(o, k) && !holds(o)).concat(outl.filter((o, j) => j !== i && !holds(o)), badges.filter(b => !hit(b, grow(k, 1))), other);
+      const bubObs = ui.concat(boxes, badges);
+      const segFree = (x1, y1, x2, y2) => { const d = Math.hypot(x2 - x1, y2 - y1); if (d < 3) return true;
+        const ux = (x2 - x1) / d, uy = (y2 - y1) / d; return ![...lineObs, ...placed].some(o => cross(x1 + ux * 2, y1 + uy * 2, x2 - ux * 2, y2 - uy * 2, o)); };
+      const plen = p => p.reduce((s, q, z) => z ? s + Math.hypot(q[0] - p[z - 1][0], q[1] - p[z - 1][1]) : 0, 0);
+      const route = c => {
+        const x1 = Math.min(Math.max((c.l + c.r) / 2, k.l), k.r), y1 = Math.min(Math.max((c.t + c.b) / 2, k.t), k.b);
+        const st = [[x1, y1], [Math.min(Math.max(x1, c.l), c.r), Math.min(Math.max(y1, c.t), c.b)]];
+        if (segFree(...st[0], ...st[1])) return st;
+        let line = null;
+        for (const [a, b] of [[k.l, k.t, k.r, k.t], [k.l, k.b, k.r, k.b], [k.l, k.t, k.l, k.b], [k.r, k.t, k.r, k.b]].flatMap(([xa, ya, xb, yb]) => { const L = Math.hypot(xb - xa, yb - ya), m = Math.max(1, Math.round(L / 8)); return Array.from({ length: m + 1 }, (_, z) => [xa + (xb - xa) * z / m, ya + (yb - ya) * z / m]); })) {
+          const p = [[a, b], [Math.min(Math.max(a, c.l), c.r), Math.min(Math.max(b, c.t), c.b)]];
+          if ((!line || plen(p) < plen(line)) && segFree(...p[0], ...p[1])) line = p;
+        }
+        if (line) return line;
+        const yc = c.t + 16, side = c.l >= k.r ? c.l : c.r <= k.l ? c.r : null; if (side === null) return null;
+        if (yc >= k.t && yc <= k.b) return null;
+        const ye = yc < k.t ? k.t : k.b; let best = null;
+        for (let xv = k.l + 6; xv <= k.r - 6; xv += 10) {
+          const p = [[xv, ye], [xv, yc], [side, yc]];
+          if (segFree(...p[0], ...p[1]) && segFree(...p[1], ...p[2]) && (!best || plen(p) < plen(best))) best = p;
+        }
+        return best;
+      };
+      const free = c => c.l >= 0 && c.r <= F.width && c.t >= 40 && c.b <= F.height - 4 && ![...bubObs, ...placed].some(o => hit(grow(c, pad), o)) && !segs.some(q => cross(...q, grow(c, 2)));
+      const w0 = co.offsetWidth, sizes = [...new Set([w0, Math.round(w0 * 0.75), Math.round(w0 * 0.55)])].map(w => { co.style.width = w + 'px'; return [w, co.offsetHeight]; });
+      const cands = [];
+      for (const [w, h] of sizes) {
+        for (let d = 6; d <= 120; d += 6)
+          for (const [x, y] of [[k.r + d, k.t], [k.l, k.b + d], [k.l - w - d, k.t], [k.l, k.t - h - d], [k.r + d, k.b - h], [k.r - w, k.b + d], [k.r - w, k.t - h - d], [k.l - w - d, k.b - h]])
+            cands.push({ l: x, t: y, r: x + w, b: y + h });
+        for (let y = 40; y + h < F.height; y += 16) for (let x = 0; x + w < F.width; x += 16) cands.push({ l: x, t: y, r: x + w, b: y + h });
+      }
+      const gap = c => Math.hypot(Math.max(0, c.l - k.r, k.l - c.r), Math.max(0, c.t - k.b, k.t - c.b));
+      const pick = list => { let bp = null, bc = null; for (const c of list.map(c => [gap(c), c]).sort((a, b) => a[0] - b[0]).map(([, c]) => c)) { if (bp && gap(c) >= plen(bp)) break; if (!free(c)) continue; const p = route(c); if (p && (!bp || plen(p) < plen(bp))) { bp = p; bc = c; } } return bc && { c: bc, p: bp }; };
+      const best = pick(cands);
+      if (!best) { fails++; co.remove(); console.error(`callouts: no place for bubble ${n}`); return; }
+      const { c: bc, p: path } = best; longest = Math.max(longest, plen(path));
+      Object.assign(co.style, { left: bc.l + 'px', top: bc.t + 'px', width: bc.r - bc.l + 'px' }); placed.push(bc);
+      const ln = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      ln.setAttribute('points', path.map(q => q.join(',')).join(' ')); ln.dataset.n = n; svg.appendChild(ln);
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', path[0][0]); dot.setAttribute('cy', path[0][1]); dot.setAttribute('r', 2.5); svg.appendChild(dot);
+      for (let z = 1; z < path.length; z++) segs.push([...path[z - 1], ...path[z]]);
+    });
+    return { fails, longest }; };
+    const idx = marks.map((_, i) => i);
+    const orders = [idx, [...idx].sort((a, b) => outl[b].r - outl[a].r), [...idx].sort((a, b) => outl[a].t - outl[b].t), [...idx].reverse()];
+    const cmp = (a, b) => a.fails - b.fails || a.longest - b.longest;
+    let bestO = null, bestR = null;
+    for (const o of orders) { const r = attempt(o); if (!bestR || cmp(r, bestR) < 0) { bestR = r; bestO = o; } }
+    if (bestO !== orders[orders.length - 1]) attempt(bestO);
+    return bestR.fails;
+  };
+  document.fonts?.addEventListener('loadingdone', () => dispatchEvent(new Event('resize')));
+  let tm; addEventListener('resize', () => { clearTimeout(tm); tm = setTimeout(layout, 120); });
+  if (document.readyState === 'complete') layout(); else addEventListener('load', layout);
+})();
+
+</script>
+</body>
+</html>

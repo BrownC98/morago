@@ -1,0 +1,44 @@
+name: sherpa-onnx prebuilt libs
+description: >
+  sherpa-onnx-sys downloads a prebuilt archive in its build script with no
+  retry (Windows run 42464042742 failed on it). Fetch it once with retries,
+  keep it in the Actions cache, and point the build script at it. On a GitHub
+  releases outage (504, 2026-11-08) keep going: the build script then reuses
+  the unpacked archive in the restored Rust cache.
+runs:
+  using: composite
+  steps:
+    - name: sherpa-onnx prebuilt archive (name)
+      id: sherpa
+      shell: bash
+      run: |
+        v=$(grep -A1 '^name = "sherpa-onnx-sys"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Windows-X64) f="sherpa-onnx-v$v-win-x64-static-MT-Release-lib.tar.bz2" ;;
+          macOS-ARM64) f="sherpa-onnx-v$v-osx-arm64-static-lib.tar.bz2" ;;
+          macOS-X64) f="sherpa-onnx-v$v-osx-x64-static-lib.tar.bz2" ;;
+          *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+        esac
+        echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/sherpa-onnx
+        key: sherpa-onnx-${{ steps.sherpa.outputs.file }}
+    - name: sherpa-onnx prebuilt archive (download)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        d="$RUNNER_TEMP/sherpa-onnx"; mkdir -p "$d"; cd "$d"
+        f=${{ steps.sherpa.outputs.file }}
+        # The release asset through the API: github.com/…/releases/download
+        # answered 504 on 2026-11-08 while the API worked.
+        if [ ! -s "$f" ]; then
+          id=$(gh api "repos/k2-fsa/sherpa-onnx/releases/tags/v${{ steps.sherpa.outputs.version }}" \
+            --jq ".assets[] | select(.name == \"$f\") | .id" || true)
+          [ -n "$id" ] && curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+            -o "$f.part" "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/$id" \
+            && mv "$f.part" "$f" || rm -f "$f.part"
+        fi
+        if [ -s "$f" ]; then echo "SHERPA_ONNX_ARCHIVE_DIR=$d" >> "$GITHUB_ENV"; else echo "::warning::sherpa-onnx archive download failed"; fi
