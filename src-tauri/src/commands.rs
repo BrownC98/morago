@@ -255,6 +255,8 @@ pub struct ModelRow {
     #[serde(flatten)]
     info: ModelInfo,
     installed: bool,
+    /// Files on disk: installed, or files that the app cannot use (an older format).
+    on_disk: bool,
 }
 
 #[tauri::command]
@@ -263,6 +265,7 @@ pub fn list_models(state: State<'_, AppState>) -> Vec<ModelRow> {
         .into_iter()
         .map(|info| ModelRow {
             installed: models::is_installed(&state.models_dir, &info.id),
+            on_disk: models::on_disk(&state.models_dir, &info.id),
             info,
         })
         .collect()
@@ -307,6 +310,23 @@ pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) ->
         );
     });
     Ok(())
+}
+
+/// Deletes the files of a model. Refused while a meeting runs or the model downloads.
+#[tauri::command]
+pub fn delete_model(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    if !matches!(*state.session.lock().expect("session lock"), Session::Idle) {
+        return Err("회의 중에는 모델을 지울 수 없습니다. 회의를 마친 뒤 지우십시오.".into());
+    }
+    if state
+        .downloads
+        .lock()
+        .expect("downloads lock")
+        .contains_key(&id)
+    {
+        return Err("내려받는 중인 모델은 지울 수 없습니다. 먼저 취소하십시오.".into());
+    }
+    models::delete(&state.models_dir, &id).map_err(err)
 }
 
 #[tauri::command]

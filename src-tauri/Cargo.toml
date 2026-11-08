@@ -40,6 +40,8 @@ sherpa-onnx = "2.0.1"
 sherpa-onnx-sys = "=2.0.1"
 # No default features: no OpenMP runtime (vcomp) to ship on Windows, no CUDA.
 llama-cpp-2 = { version = "0.1.161", default-features = false }
+# Local Whisper. whisper.cpp builds on the ggml of llama-cpp-2: vendor/whisper-rs-sys.
+whisper-rs = { version = "=0.16.0", default-features = false }
 sha2 = "0.11"
 
 # OS credential stores for API keys (secrets.rs). Linux is for development only.
@@ -62,6 +64,9 @@ linux-keyutils-keyring-store = "1.0.0"
 
 [dev-dependencies]
 hound = "3"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

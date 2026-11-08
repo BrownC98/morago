@@ -83,6 +83,8 @@ export interface ModelInfo {
   size_bytes: number;
   note: string;
   installed: boolean;
+  /** Files on disk: installed, or files of an older format that the app does not use. */
+  on_disk: boolean;
 }
 
 export interface DownloadProgress {
@@ -171,6 +173,7 @@ export const api = {
   listModels: () => call<ModelInfo[]>("list_models"),
   downloadModel: (id: string) => call<void>("download_model", { id }),
   cancelDownload: (id: string) => call<void>("cancel_download", { id }),
+  deleteModel: (id: string) => call<void>("delete_model", { id }),
   startSession: (title: string | null) => call<SessionMeta>("start_session", { title }),
   stopSession: () => call<SessionSummary>("stop_session"),
   listSessions: () => call<SessionSummary[]>("list_sessions"),

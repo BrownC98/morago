@@ -1,14 +1,14 @@
 # morago: agent notes
 
 Desktop app (Windows, macOS) for meeting minutes with live translated subtitles.
-Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs (WASAPI loopback, Core Audio tap) and in-process native models (sherpa-onnx, llama.cpp) from Rust; small installer.
+Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs (WASAPI loopback, Core Audio tap) and in-process native models (sherpa-onnx, llama.cpp, whisper.cpp) from Rust; small installer.
 
 ## Layout
 
 - `src-tauri/src/types.rs`: shared data types (contract between modules).
 - `src-tauri/src/audio/`: mic + system audio capture, resample to 16 kHz mono.
-- `src-tauri/src/speech/`: VAD, ASR providers, speaker diarization.
-- `src-tauri/src/models.rs`: downloadable models (ASR: SenseVoice Small default, Qwen3-ASR 0.6B, Whisper; Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
+- `src-tauri/src/speech/`: VAD, ASR providers, speaker diarization. sherpa-onnx: SenseVoice, Qwen3-ASR, VAD, CAM++. Whisper: whisper.cpp (`whisper-rs`) on the ggml of llama.cpp through the fork `src-tauri/vendor/whisper-rs-sys` (its README says how to update it).
+- `src-tauri/src/models.rs`: downloadable models (ASR: SenseVoice Small default, Qwen3-ASR 0.6B, Whisper ggml; Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
 - `src-tauri/src/translate/`: translation providers.
 - `src-tauri/src/settings.rs`, `secrets.rs`: settings JSON and API keys in the OS credential store.
 - `src-tauri/src/store/`: session files and export.
