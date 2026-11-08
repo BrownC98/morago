@@ -217,16 +217,14 @@ fn parse_result(json: &str) -> anyhow::Result<Transcript> {
     Ok(Transcript { text, language })
 }
 
-/// ko for Hangul, ja for kana, zh for Han without kana; `None` for other
-/// scripts (Latin is many languages; the translator then detects it).
+/// ko for Hangul, ja for kana; `None` for other scripts, and the translator
+/// detects the language. Han without kana is also Japanese ("了解", "大丈夫").
 fn language_from_script(text: &str) -> Option<String> {
     let has = |range: std::ops::RangeInclusive<char>| text.chars().any(|c| range.contains(&c));
     let code = if has('\u{AC00}'..='\u{D7A3}') || has('\u{1100}'..='\u{11FF}') {
         "ko"
     } else if has('\u{3040}'..='\u{30FF}') {
         "ja"
-    } else if has('\u{4E00}'..='\u{9FFF}') {
-        "zh"
     } else {
         return None;
     };
@@ -288,7 +286,8 @@ mod tests {
         for (text, lang) in [
             ("안녕하세요 Kim 씨", Some("ko")),
             ("今日は会議です", Some("ja")),
-            ("今天开会", Some("zh")),
+            ("今天开会", None),
+            ("了解", None),
             ("Hello, team.", None),
             ("", None),
         ] {

@@ -153,9 +153,9 @@ mod tests {
         }
         println!("ASR+diarize time: {:?}", started.elapsed());
         assert!(segs.len() >= order.len(), "VAD found too few segments");
-        // Qwen3-ASR gives no language; Latin script then stays unknown.
+        // Qwen3-ASR gives no language; Latin and Han-only text then stay unknown.
         let want_langs: &[&str] = if asr_id == models::QWEN3_ASR_ID {
-            &["ko", "ja", "zh"]
+            &["ko", "ja"]
         } else {
             &["en", "ko", "ja", "zh"]
         };

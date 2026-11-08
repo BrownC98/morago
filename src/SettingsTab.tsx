@@ -517,7 +517,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                 />
               </div>
               <span className="fhint">
-                한 언어로만 말하는 회의는 언어를 고르면 음성 인식이 더 정확합니다.
+                한 언어로만 말하는 회의는 언어를 고르면 음성 인식이 더 정확합니다. 다음 회의부터 적용됩니다.
               </span>
               {systemAudio && !systemAudio.supported ? (
                 <div className="notice" role="note">
