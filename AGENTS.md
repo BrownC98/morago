@@ -28,6 +28,8 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 
 - Setup (Linux/WSL dev): `rustup default stable`, `rustup component add rustfmt clippy`, `pnpm install`. Linux needs webkit2gtk-4.1, cmake, clang, libclang-dev.
 - While editing: `cd src-tauri && memcap -m 4G cargo check` (UI: `pnpm build`). Do not run full local builds or test suites on the shared VM.
+- Windows check on this PC, from WSL: `scripts/win-check.sh` runs the CI `check` steps (clippy `-D warnings`, tests) on the Windows host; `scripts/win-check.sh check` or other cargo arguments run that cargo command. It copies the work tree, also uncommitted files, with git to `C:\Users\<user>\morago-win-check` and builds there (measured 2026-11-08: 2-4 min after a one-file change, about 9 min on an empty target). Run it before you push Windows-specific code. CI stays the gate. Windows tools: rustup (stable MSVC), VS 2022 Build Tools (C++), CMake and LLVM from winget.
+- WSL builds share compiled crates through sccache: `~/.cargo/config.toml` (user level, CI does not read it) has `[build] rustc-wrapper = "sccache"`.
 - Completion evidence and gate: the GitHub Actions run of `.github/workflows/ci.yml` for the exact head commit passes the `check` job on Windows and macOS (fmt, clippy, tests). Push, then `scripts/gate/check.sh` finds and waits for that run. Save the run URL in your task `logs/`.
 - Installers (NSIS, dmg): the `bundle` job runs only on tags `v*` and manual runs: `gh workflow run ci.yml --ref <branch>`.
 - End-to-end test with real models: manual run (`gh workflow run ci.yml --ref <branch>`), job `e2e` (Windows, macOS).
