@@ -95,6 +95,9 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test
+      - name: OS credential store round-trip
+        working-directory: src-tauri
+        run: cargo test secrets -- --ignored
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs.
   bundle:
