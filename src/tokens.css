@@ -1,0 +1,69 @@
+/* Product tokens. Light values come from the approved mockup (docs/mockups/app-screens.html).
+   Both themes are checked for contrast (text >= 4.5:1, large text and UI >= 3:1).
+   theme.ts sets data-theme to "light" or "dark" (System resolves live from prefers-color-scheme). */
+:root {
+  --a-bg: oklch(98.6% 0.004 255);
+  --a-side: oklch(96.4% 0.006 255);
+  --a-surface: oklch(100% 0 0);
+  --a-line: oklch(91% 0.008 255);
+  --a-line-2: oklch(85% 0.01 255);
+  --a-ctl: oklch(62% 0.012 258);
+  --a-ink: oklch(21% 0.02 258);
+  --a-ink-2: oklch(40% 0.02 258);
+  --a-ink-3: oklch(50% 0.018 258);
+  --a-accent: oklch(50% 0.19 258);
+  --a-accent-ink: oklch(100% 0 0);
+  --a-accent-wash: oklch(95% 0.03 258);
+  --a-rec: oklch(53% 0.2 27);
+  --a-rec-ink: oklch(100% 0 0);
+  --a-err: oklch(53% 0.2 27);
+  --a-ok: oklch(52% 0.13 150);
+  --a-warn-wash: oklch(96% 0.05 90);
+  --a-warn-ink: oklch(42% 0.09 80);
+  --a-shadow: oklch(20% 0.02 258 / 0.08);
+  --a-scrim: oklch(20% 0.02 258 / 0.45);
+
+  --spk-1: oklch(55% 0.15 258);
+  --spk-2: oklch(60% 0.14 160);
+  --spk-3: oklch(62% 0.15 55);
+  --spk-4: oklch(55% 0.17 330);
+  --spk-5: oklch(58% 0.12 200);
+  --spk-6: oklch(55% 0.02 258);
+
+  --font: "Pretendard", system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+  --radius: 8px;
+  color-scheme: light;
+}
+
+/* Dark values: mockup v2 section 4 (.page.dark), plus the tokens the mockup does not define. */
+:root[data-theme="dark"] {
+  --a-bg: oklch(19% 0.012 258);
+  --a-side: oklch(22% 0.014 258);
+  --a-surface: oklch(24.5% 0.015 258);
+  --a-line: oklch(31% 0.015 258);
+  --a-line-2: oklch(38% 0.018 258);
+  --a-ctl: oklch(60% 0.016 258);
+  --a-ink: oklch(95% 0.006 258);
+  --a-ink-2: oklch(82% 0.01 258);
+  --a-ink-3: oklch(72% 0.012 258);
+  --a-accent: oklch(72% 0.15 258);
+  --a-accent-ink: oklch(18% 0.02 258);
+  --a-accent-wash: oklch(32% 0.06 258);
+  --a-rec: oklch(64% 0.19 27);
+  --a-rec-ink: oklch(15% 0.02 27);
+  --a-err: oklch(72% 0.17 25);
+  --a-ok: oklch(72% 0.14 150);
+  --a-warn-wash: oklch(30% 0.05 90);
+  --a-warn-ink: oklch(86% 0.1 90);
+  --a-shadow: oklch(0% 0 0 / 0.35);
+  --a-scrim: oklch(0% 0 0 / 0.6);
+
+  --spk-1: oklch(70% 0.14 258);
+  --spk-2: oklch(74% 0.13 160);
+  --spk-3: oklch(76% 0.13 55);
+  --spk-4: oklch(74% 0.14 330);
+  --spk-5: oklch(76% 0.1 200);
+  --spk-6: oklch(72% 0.02 258);
+  color-scheme: dark;
+}

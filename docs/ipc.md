@@ -32,6 +32,7 @@ Errors: a command rejects with a Korean user-facing string that names the proble
 | Event | Payload |
 |---|---|
 | `utterance` | `Utterance`. Upsert by `id`: the first event has `translation.state = "pending"`, a later one the result. |
+| `utterance-partial` | `PartialText` `{ source, start_ms, text }`: live text of speech that has not ended (reserved for the streaming "live mode"; the first release does not send it). Show one grey line per source; remove it when an `utterance` of that source arrives. |
 | `audio-level` | `{ source: "mic"\|"system", rms: number }` (0..1, about 10 per second while running) |
 | `session-state` | `{ running: boolean, sessionId: string \| null, startedAt: string \| null }` |
 | `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model", source: "mic"\|"system"\|null, message: string }` |
