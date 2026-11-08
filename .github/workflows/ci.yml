@@ -17,6 +17,9 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # macOS: the Core Audio process tap API needs 14.2 (system audio itself is
+  # gated at 14.6 at run time). Same value as bundle.macOS.minimumSystemVersion.
+  MACOSX_DEPLOYMENT_TARGET: "14.2"
 
 jobs:
   # Which parts changed since master (on master: since the previous push).
@@ -83,6 +86,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # sherpa-onnx-sys downloads a prebuilt archive in its build script with
+      # no retry (Windows run 42464042742 failed on it). Fetch it once with
+      # retries, keep it in the Actions cache, and point the build script at it.
+      - name: sherpa-onnx prebuilt archive (name)
+        id: sherpa
+        shell: bash
+        run: |
+          v=$(grep -A1 '^name = "sherpa-onnx-sys"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Windows-X64) f="sherpa-onnx-v$v-win-x64-static-MT-Release-lib.tar.bz2" ;;
+            macOS-ARM64) f="sherpa-onnx-v$v-osx-arm64-static-lib.tar.bz2" ;;
+            macOS-X64) f="sherpa-onnx-v$v-osx-x64-static-lib.tar.bz2" ;;
+            *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sherpa-onnx
+          key: sherpa-onnx-${{ steps.sherpa.outputs.file }}
+      - name: sherpa-onnx prebuilt archive (download)
+        shell: bash
+        run: |
+          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR"; cd "$SHERPA_ONNX_ARCHIVE_DIR"
+          f=${{ steps.sherpa.outputs.file }}
+          [ -s "$f" ] || curl -fsSL --retry 5 --retry-all-errors -o "$f" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -121,6 +151,33 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
+      # sherpa-onnx-sys downloads a prebuilt archive in its build script with
+      # no retry (Windows run 42464042742 failed on it). Fetch it once with
+      # retries, keep it in the Actions cache, and point the build script at it.
+      - name: sherpa-onnx prebuilt archive (name)
+        id: sherpa
+        shell: bash
+        run: |
+          v=$(grep -A1 '^name = "sherpa-onnx-sys"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Windows-X64) f="sherpa-onnx-v$v-win-x64-static-MT-Release-lib.tar.bz2" ;;
+            macOS-ARM64) f="sherpa-onnx-v$v-osx-arm64-static-lib.tar.bz2" ;;
+            macOS-X64) f="sherpa-onnx-v$v-osx-x64-static-lib.tar.bz2" ;;
+            *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sherpa-onnx
+          key: sherpa-onnx-${{ steps.sherpa.outputs.file }}
+      - name: sherpa-onnx prebuilt archive (download)
+        shell: bash
+        run: |
+          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR"; cd "$SHERPA_ONNX_ARCHIVE_DIR"
+          f=${{ steps.sherpa.outputs.file }}
+          [ -s "$f" ] || curl -fsSL --retry 5 --retry-all-errors -o "$f" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
