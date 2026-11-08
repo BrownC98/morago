@@ -37,7 +37,7 @@
 pnpm install
 pnpm tauri dev          # 개발 모드로 앱 실행
 pnpm tauri build        # 설치 파일 만들기(src-tauri/target/release/bundle)
-scripts/gate/check.sh   # 검사(프런트 빌드, rustfmt, clippy, 테스트)
+scripts/gate/check.sh   # 이 커밋의 Windows·macOS CI 결과를 기다려 확인
 ```
 
 GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows(NSIS 설치 파일)와 macOS(dmg)를 빌드하고 결과물을 올린다. 서명하지 않은 빌드이므로 macOS에서는 처음 열 때 Finder에서 오른쪽 클릭 → 열기를 쓴다.
