@@ -2623,6 +2623,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sherpa-onnx",
  "sherpa-onnx-sys",
  "tauri",
