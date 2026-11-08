@@ -7,10 +7,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=BrownC98/morago
 TIMEOUT=${CI_WAIT_TIMEOUT:-3600}
-# Jobs that must pass: "check" on both OSes; for a merge into master also
-# "bundle" (installers) on both OSes.
+# Jobs that must pass: "check" on both OSes. Installers ("bundle") build
+# only at release (tags v*, manual runs), not in the gate.
 NEED="check"
-[ "$(git branch --show-current)" = master ] && NEED="check bundle"
 
 run_for() { # prints the newest ci.yml run id for a commit, or nothing
   gh run list -R "$REPO" --workflow ci.yml --commit "$1" -L 1 \

@@ -40,7 +40,7 @@ pnpm tauri build        # 설치 파일 만들기(src-tauri/target/release/bundl
 scripts/gate/check.sh   # 이 커밋의 Windows·macOS CI 결과를 기다려 확인
 ```
 
-GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows(NSIS 설치 파일)와 macOS(dmg)를 빌드하고 결과물을 올린다. 서명하지 않은 빌드이므로 macOS에서는 처음 열 때 Finder에서 오른쪽 클릭 → 열기를 쓴다.
+GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 검사(rustfmt, clippy, 테스트)를 돌린다. 설치 파일(Windows NSIS, macOS dmg)은 `v*` 태그와 수동 실행(`gh workflow run ci.yml --ref <브랜치>`)에서만 만든다. 서명하지 않은 빌드이므로 macOS에서는 처음 열 때 Finder에서 오른쪽 클릭 → 열기를 쓴다.
 
 ## 쓰는 법
 
