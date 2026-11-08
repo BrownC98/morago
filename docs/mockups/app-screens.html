@@ -128,6 +128,27 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
 .bar { display: flex; align-items: center; gap: 18px; padding: 0 16px; background: var(--a-side); border-top: 1px solid var(--a-line); font-size: 12px; color: var(--a-ink-2); }
 .bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok); display: inline-block; margin-right: 6px; }
 
+.page.dark {
+  --a-bg: oklch(19% 0.012 258);
+  --a-side: oklch(22% 0.014 258);
+  --a-surface: oklch(24.5% 0.015 258);
+  --a-line: oklch(31% 0.015 258);
+  --a-line-2: oklch(38% 0.018 258);
+  --a-ink: oklch(95% 0.006 258);
+  --a-ink-2: oklch(82% 0.01 258);
+  --a-ink-3: oklch(72% 0.012 258);
+  --a-accent: oklch(72% 0.15 258);
+  --a-accent-ink: oklch(18% 0.02 258);
+  --a-accent-wash: oklch(32% 0.06 258);
+  --a-rec: oklch(64% 0.19 27);
+  --a-ok: oklch(72% 0.14 150);
+  --a-warn-wash: oklch(30% 0.05 90);
+  --a-warn-ink: oklch(86% 0.1 90);
+  color-scheme: dark;
+}
+.page.dark .s1 { --c: oklch(70% 0.14 258); } .page.dark .s2 { --c: oklch(74% 0.13 160); } .page.dark .s3 { --c: oklch(76% 0.13 55); } .page.dark .me { --c: oklch(72% 0.02 258); }
+.page.dark .ab.stop { color: oklch(15% 0.02 27); }
+
 /* live */
 .live { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .ctl { display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: var(--a-surface); border-bottom: 1px solid var(--a-line); }
@@ -198,7 +219,7 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
 </head>
 <body data-ui=".ab, .sel, .tab, .ro, .inp, .sw, .search">
 <main class="doc">
-  <div class="who"><span class="doc-id">문서 ID: <b>M78</b></span><span>응답할 곳: <b>코디 · 코디 회의번역앱</b></span><span>연 담당: <b>코디 · 코디 회의번역앱</b></span><span>v1 · 2026-11-08</span></div>
+  <div class="who"><span class="doc-id">문서 ID: <b>M78</b></span><span>응답할 곳: <b>코디 · 코디 회의번역앱</b></span><span>연 담당: <b>코디 · 코디 회의번역앱</b></span><span>v2 · 2026-11-08 (v1 승인, 다크 테마 기록용 추가)</span></div>
   <h1>회의 통역 앱: 실시간 자막, 기록, 설정 화면</h1>
   <p class="lead">사람의 요구: Windows와 macOS에서 마이크와 시스템 소리를 함께 받아, 외국어 발화를 사용자가 고른 언어로 실시간 번역해 화면에 보입니다. 화자와 발화 시각을 기록하고, 원문과 번역을 저장합니다. 음성 인식과 번역은 로컬 모델과 사용자 지정 서비스(OpenAI 호환 주소)를 모두 씁니다.</p>
   <div class="flow"><b>① 회의</b>에서 [시작] → 발화마다 화자·시각·원문·번역이 쌓임 → [중지]하면 자동 저장 → <b>② 기록</b>에서 다시 보기·내보내기 → 모델과 언어는 <b>③ 설정</b>에서 정함</div>
@@ -343,6 +364,32 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
       <div><b>11</b><span>이 컴퓨터에서 인식하면 소리가 밖으로 나가지 않습니다. 모델은 한 번 내려받습니다.</span></div>
       <div><b>12</b><span>사용자 지정 서비스: 주소, 키, 모델 이름을 넣습니다. 키는 끝 4자리만 보이고 [바꾸기]·[삭제]로 고칩니다. 음성 인식에도 같은 칸이 있습니다.</span></div>
       <div><b>13</b><span>운영체제의 제한을 그 자리에서 알립니다. Windows는 10 이상에서 시스템 소리를 받습니다.</span></div>
+    </div>
+  </div>
+  <div class="fig">
+    <h2>④ 회의, 다크 테마 <span class="tag">설정 › 화면 › 테마: 라이트 / 다크 / 시스템</span></h2>
+    <div class="page dark">
+      <div class="top">
+        <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
+        <span class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">회의</button><button class="tab" role="tab">기록</button><button class="tab" role="tab">설정</button></span>
+        <span class="sp"></span>
+        <span class="timer">00:12:47</span>
+      </div>
+      <div class="live">
+        <div class="ctl">
+          <span class="nomk"><span class="row2" style="gap:16px"><span class="tog"><span class="sw"></span>마이크 <span class="lvl"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i class="z" style="height:14px"></i></span></span><span class="tog"><span class="sw"></span>시스템 소리 <span class="lvl"><i style="height:7px"></i><i style="height:11px"></i><i style="height:14px"></i><i style="height:10px"></i></span></span></span></span>
+          <span class="sp"></span>
+          <span class="nomk"><span class="sel"><span class="lab">번역할 언어</span>한국어<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></span>
+          <span class="nomk"><button class="ab stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>중지하고 저장</button></span>
+        </div>
+        <div class="feed">
+          <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:11:58–00:12:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap. We moved the launch to the second week of December.</p><p class="tr">3분기 로드맵부터 시작하죠. 출시를 12월 둘째 주로 옮겼습니다.</p></div></div>
+          <div class="utt"><div class="who-c"><span class="spk me">화자 2</span><span class="src">마이크</span><span class="tm">00:12:07–00:12:11</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>그럼 베타 테스트 일정도 같이 밀리나요?</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
+          <div class="nomk"><div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:12:13–00:12:24</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>ベータは予定通り11月末に始めます。フィードバックは二週間で集めます。</p><p class="tr">베타는 예정대로 11월 말에 시작합니다. 피드백은 2주 동안 모읍니다.</p></div></div></div>
+          <div class="nomk"><div class="utt now"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:12:26–00:12:33</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Good. Then marketing needs the final screenshots by November 20th.</p><p class="tr wait">번역하는 중…</p></div></div></div>
+        </div>
+      </div>
+      <div class="bar"><span class="nomk"><span><span class="dot"></span>음성 인식: 로컬 Whisper small</span>　<span><span class="dot"></span>번역: 로컬 Qwen2.5 3B</span></span><span class="sp"></span><span>자동 저장: 발화 4개</span></div>
     </div>
   </div>
 </main>
