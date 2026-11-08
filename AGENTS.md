@@ -22,7 +22,7 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 ## Commands
 
 - Setup (Linux/WSL dev): `rustup default stable`, `rustup component add rustfmt clippy`, `pnpm install`. Linux needs webkit2gtk-4.1, cmake, clang, libclang-dev.
-- All local checks: `scripts/gate/check.sh` (pnpm build, cargo fmt --check, clippy -D warnings, cargo test).
-- Light check while editing: `cd src-tauri && cargo check`.
+- While editing: `cd src-tauri && memcap -m 4G cargo check` (UI: `pnpm build`). Do not run full local builds or test suites on the shared VM.
+- Completion evidence and gate: the GitHub Actions run of `.github/workflows/ci.yml` for the exact head commit passes the `check` job on Windows and macOS (fmt, clippy, tests). Push, then `scripts/gate/check.sh` finds and waits for that run. Save the run URL in your task `logs/`.
+- Installers (NSIS, dmg): the `bundle` job runs only on tags `v*` and manual runs: `gh workflow run ci.yml --ref <branch>`.
 - Run the app: `pnpm tauri dev`.
-- Windows and macOS builds: GitHub Actions `ci.yml` on each push (artifacts: NSIS .exe, .dmg). `gh run list --branch <branch>`.
