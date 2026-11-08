@@ -126,3 +126,14 @@ pub struct DownloadProgress {
     pub done_bytes: u64,
     pub total_bytes: Option<u64>,
 }
+
+/// Live text of speech that has not ended yet (streaming ASR, follow-up
+/// "live mode"). The UI shows one partial line per source and removes it
+/// when an `Utterance` of the same source arrives. The VAD + Whisper
+/// pipeline does not send it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartialText {
+    pub source: SourceKind,
+    pub start_ms: u64,
+    pub text: String,
+}

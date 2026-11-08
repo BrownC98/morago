@@ -7,7 +7,8 @@ use crate::speech::{self, Diarizer, Vad};
 use crate::store::{SessionStore, SessionWriter};
 use crate::translate::{self, needs_translation};
 use crate::types::{
-    AudioChunk, SessionMeta, SessionSummary, SourceKind, SpeechSegment, TranslationState, Utterance,
+    AudioChunk, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
+    TranslationState, Utterance,
 };
 use crate::{audio, models};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
@@ -23,6 +24,10 @@ pub trait Sink: Send + Sync + 'static {
     fn utterance(&self, u: &Utterance);
     fn level(&self, source: SourceKind, rms: f32);
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str);
+    /// Streaming ASR only (follow-up live mode).
+    fn partial(&self, p: &PartialText) {
+        let _ = p;
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -39,6 +44,9 @@ struct ErrorEvent<'a> {
 }
 
 impl Sink for AppHandle {
+    fn partial(&self, p: &PartialText) {
+        let _ = self.emit("utterance-partial", p);
+    }
     fn utterance(&self, u: &Utterance) {
         let _ = self.emit("utterance", u);
     }
