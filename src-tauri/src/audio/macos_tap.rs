@@ -550,36 +550,24 @@ fn aggregate_properties(
 
 #[cfg(test)]
 mod tests {
-    /// The macOS 14.2 symbols must be weak imports (or absent): a strong import stops the app at
-    /// launch on macOS 13. Evidence for the CI log: the matching `nm -m` lines are printed.
     #[test]
     fn no_strong_import_of_process_tap_symbols() {
         let exe = std::env::current_exe().expect("test binary path");
-        let Ok(out) = std::process::Command::new("nm")
+        let out = std::process::Command::new("nm")
             .arg("-m")
             .arg(&exe)
             .output()
-        else {
-            eprintln!("nm is not available: skipped");
-            return;
-        };
+            .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        let lines: Vec<&str> = text.lines().filter(|l| l.contains("ProcessTap")).collect();
-        eprintln!("nm -m ProcessTap lines: {lines:#?}");
-        let strong: Vec<&&str> = lines
-            .iter()
-            .filter(|l| l.contains("(undefined)") && !l.contains("weak"))
-            .collect();
-        assert!(strong.is_empty(), "strong imports: {strong:#?}");
-        let undef: Vec<&str> = text
+        let sel: Vec<&str> = text
             .lines()
-            .filter(|l| l.contains("(undefined)") && l.contains("CoreAudio"))
+            .filter(|l| {
+                l.contains("AudioHardware")
+                    || l.contains("AudioObjectGetPropertyData")
+                    || l.contains("ProcessTap")
+            })
+            .take(40)
             .collect();
-        panic!(
-            "DIAGNOSTIC total={} stderr={} undefined-from-CoreAudio={:#?}",
-            text.lines().count(),
-            String::from_utf8_lossy(&out.stderr),
-            undef
-        );
+        panic!("DIAGNOSTIC {sel:#?}");
     }
 }
