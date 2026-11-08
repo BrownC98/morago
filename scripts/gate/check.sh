@@ -41,6 +41,14 @@ check_sha() {
   fi
 }
 
+# Delete gate/* branches left by an earlier killed gate (older than 1 hour).
+git fetch -q --prune origin '+refs/heads/gate/*:refs/remotes/origin/gate/*' || true
+now=$(date +%s)
+git for-each-ref --format='%(refname:lstrip=4) %(committerdate:unix)' 'refs/remotes/origin/gate/' |
+  while read -r name when; do
+    [ $((now - when)) -gt 3600 ] && git push -q origin --delete "gate/$name" && echo "gate: deleted stale gate/$name"
+  done || true
+
 head=$(git rev-parse HEAD)
 tree=$(git rev-parse "HEAD^{tree}")
 if [ -n "$(run_for "$head")" ]; then
@@ -59,7 +67,12 @@ else
     tmp="gate/$head"
     echo "gate: HEAD $head is not on CI; pushing temp branch $tmp"
     git push -q origin "$head:refs/heads/$tmp"
-    trap 'git push -q origin --delete "$tmp" || true' EXIT
+    # Delete the temp branch on every exit: pass, fail, timeout or kill.
+    cleanup() { git push -q origin --delete "$tmp" || echo "gate: could not delete $tmp" >&2; }
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     check_sha "$head"
   fi
 fi
