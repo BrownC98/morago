@@ -71,6 +71,10 @@ pub struct Settings {
     /// ISO 639-1 code, default "ko".
     pub target_language: String,
     pub asr: AsrConfig,
+    /// Meeting language for speech recognition, ISO 639-1 ("ko", "ja", "zh",
+    /// "en"). `None` = detect per segment (default). When set, every ASR uses
+    /// it and gives it as the utterance language.
+    pub meeting_language: Option<String>,
     pub translate: TranslateConfig,
     pub diarize: bool,
     pub capture_mic: bool,
@@ -87,8 +91,9 @@ impl Default for Settings {
             theme: Theme::System,
             target_language: "ko".into(),
             asr: AsrConfig::Local {
-                model_id: "whisper-small".into(),
+                model_id: crate::models::SENSE_VOICE_ID.into(),
             },
+            meeting_language: None,
             translate: TranslateConfig::Local {
                 model_id: "gemma-4-e2b-it-q4".into(),
             },
@@ -168,6 +173,7 @@ mod tests {
                     model: "whisper-1".into(),
                 },
             },
+            meeting_language: Some("ja".into()),
             translate: TranslateConfig::Local {
                 model_id: "m".into(),
             },
@@ -251,6 +257,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load(&path).unwrap(), translate_custom(None));
+    }
+
+    #[test]
+    fn a_file_with_a_whisper_model_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(
+            Settings::default().asr,
+            AsrConfig::Local {
+                model_id: crate::models::SENSE_VOICE_ID.into()
+            }
+        );
+        for id in [
+            "whisper-base",
+            "whisper-small",
+            "whisper-medium",
+            "whisper-turbo",
+        ] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"asr":{{"kind":"local","model_id":"{id}"}}}}"#),
+            )
+            .unwrap();
+            let s = load(&path).unwrap();
+            assert_eq!(
+                s.asr,
+                AsrConfig::Local {
+                    model_id: id.into()
+                }
+            );
+            // A file from before the meeting language setting: detect.
+            assert_eq!(s.meeting_language, None);
+            assert!(crate::models::catalog().iter().any(|m| m.id == id));
+        }
     }
 
     #[test]

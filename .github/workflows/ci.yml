@@ -107,8 +107,8 @@ jobs:
         working-directory: src-tauri
         run: cargo test secrets -- --ignored
 
-  # End to end with real models (VAD, Whisper base, speaker embedding, Gemma 4
-  # E2B): engine::tests::pipeline_end_to_end. Manual runs only (about 1.5 GB
+  # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
+  # E2B): engine::tests::pipeline_end_to_end. Manual runs only (about 3.6 GB
   # of models, cached).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: e2e/models
-          key: e2e-models-v1
+          key: e2e-models-v2
       - name: Test speech clips (sherpa-onnx model test files)
         shell: bash
         run: |

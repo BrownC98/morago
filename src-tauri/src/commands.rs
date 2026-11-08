@@ -211,7 +211,11 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
     let result = blocking(move || -> anyhow::Result<String> {
         match role {
             Role::Asr => {
-                let mut asr = speech::build_asr(&settings.asr, &models_dir)?;
+                let mut asr = speech::build_asr(
+                    &settings.asr,
+                    settings.meeting_language.as_deref(),
+                    &models_dir,
+                )?;
                 // One second of silence: checks the address, key and model name.
                 let seg = SpeechSegment {
                     source: SourceKind::Mic,
