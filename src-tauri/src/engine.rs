@@ -824,11 +824,20 @@ mod tests {
         (summary, meta, utterances)
     }
 
+    /// Prints the partial translation lag lines of `engine::partial`.
+    fn log_partials() {
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_module("morago_lib::engine::partial", log::LevelFilter::Info)
+            .try_init();
+    }
+
     /// End to end without audio devices: speech clips go into the pipeline as
     /// 100 ms chunks of two sources, then the saved session is read back.
     #[test]
     #[ignore]
     fn pipeline_end_to_end() {
+        log_partials();
         let models_dir = models_dir();
         let settings = e2e_settings(&models_dir);
         let root = tempfile::tempdir().unwrap();
@@ -862,6 +871,15 @@ mod tests {
                 .unwrap()
         );
         println!("errors: {:?}", recorder.errors.lock().unwrap());
+        let shown = recorder.partials.lock().unwrap();
+        println!(
+            "partials: {}, with translation: {}",
+            shown.len(),
+            shown
+                .iter()
+                .filter(|(_, p)| p.translation.is_some())
+                .count()
+        );
         assert!(recorder.errors.lock().unwrap().is_empty());
         assert!(summary.utterance_count >= 3, "{summary:?}");
         let lang = |l: &str| {
@@ -933,10 +951,7 @@ mod tests {
     #[test]
     #[ignore]
     fn pipeline_realtime() {
-        let _ = env_logger::builder()
-            .is_test(true)
-            .filter_module("morago_lib::engine::partial", log::LevelFilter::Info)
-            .try_init();
+        log_partials();
         let models_dir = models_dir();
         let settings = e2e_settings(&models_dir);
         let chunks = e2e_chunks();
