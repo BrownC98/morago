@@ -27,10 +27,18 @@ check_sha() {
     return 1
   fi
   echo "gate: CI run https://github.com/$REPO/actions/runs/$id for $sha"
-  timeout "$TIMEOUT" gh run watch -R "$REPO" "$id" --exit-status >/dev/null || {
+  timeout "$TIMEOUT" gh run watch -R "$REPO" "$id" --exit-status >/dev/null || true
+  # A run cancelled by a later push is not a verdict on this commit: run it once more.
+  if [ "$(gh run view -R "$REPO" "$id" --json conclusion -q .conclusion)" = cancelled ]; then
+    echo "gate: run $id was cancelled; running it again"
+    gh run rerun -R "$REPO" "$id"
+    sleep 10
+    timeout "$TIMEOUT" gh run watch -R "$REPO" "$id" --exit-status >/dev/null || true
+  fi
+  if [ "$(gh run view -R "$REPO" "$id" --json conclusion -q .conclusion)" != success ]; then
     echo "gate: CI run $id failed or timed out" >&2
     return 1
-  }
+  fi
   local bad ok skipped
   bad=$(gh run view -R "$REPO" "$id" --json jobs -q '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped")] | length')
   ok=$(gh run view -R "$REPO" "$id" --json jobs -q '[.jobs[] | select(.conclusion == "success" and (.name | startswith("check (")) and (.name | test("windows|macos")))] | length')
