@@ -16,13 +16,31 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// Where the one session is in its life.
+enum Session {
+    Idle,
+    Running(Box<Running>),
+    /// `engine::stop` drains the queues; the id stays protected.
+    Stopping(String),
+}
+
+impl Session {
+    fn id(&self) -> Option<&str> {
+        match self {
+            Session::Idle => None,
+            Session::Running(r) => Some(&r.meta.id),
+            Session::Stopping(id) => Some(id),
+        }
+    }
 }
 
 pub struct AppState {
@@ -32,7 +50,9 @@ pub struct AppState {
     bundled_dir: PathBuf,
     default_sessions_dir: PathBuf,
     settings: Mutex<Settings>,
-    running: Mutex<Option<Running>>,
+    /// The session and its stop state; `stopped` wakes waiters when a stop ends.
+    session: Mutex<Session>,
+    stopped: Condvar,
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
@@ -54,18 +74,47 @@ impl AppState {
             bundled_dir,
             default_sessions_dir,
             settings: Mutex::new(settings),
-            running: Mutex::new(None),
+            session: Mutex::new(Session::Idle),
+            stopped: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Stops a running session at app exit.
+    /// At app exit: stops a running session, or waits for a stop that is
+    /// still draining the queues, so the record is complete.
     pub fn stop_on_exit(&self) {
-        if let Some(r) = self.running.lock().expect("running lock").take()
-            && let Err(e) = engine::stop(r)
+        if let Some(r) = self.begin_stop()
+            && let Err(e) = self.finish_stop(r)
         {
             log::error!("session stop at exit failed: {e}");
         }
+        let mut s = self.session.lock().expect("session lock");
+        while matches!(*s, Session::Stopping(_)) {
+            s = self.stopped.wait(s).expect("session lock");
+        }
+    }
+
+    /// Moves a running session to `Stopping`; `None` if none runs.
+    fn begin_stop(&self) -> Option<Running> {
+        let mut s = self.session.lock().expect("session lock");
+        match std::mem::replace(&mut *s, Session::Idle) {
+            Session::Running(r) => {
+                *s = Session::Stopping(r.meta.id.clone());
+                Some(*r)
+            }
+            other => {
+                *s = other;
+                None
+            }
+        }
+    }
+
+    /// Drains and closes the session (blocking), then wakes waiters.
+    fn finish_stop(&self, r: Running) -> anyhow::Result<SessionSummary> {
+        let result = engine::stop(r);
+        *self.session.lock().expect("session lock") = Session::Idle;
+        self.stopped.notify_all();
+        result
     }
 
     fn settings(&self) -> Settings {
@@ -105,7 +154,7 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
         check_base_url(&endpoint.base_url)?;
     }
     settings::save(&state.settings_path, &settings).map_err(err)?;
-    if let Some(r) = state.running.lock().expect("running lock").as_ref() {
+    if let Session::Running(r) = &*state.session.lock().expect("session lock") {
         *r.target_language.write().expect("target lock") = settings.target_language.clone();
     }
     *state.settings.lock().expect("settings lock") = settings;
@@ -277,8 +326,8 @@ pub async fn start_session(
     state: State<'_, AppState>,
     title: Option<String>,
 ) -> CmdResult<SessionMeta> {
-    if state.running.lock().expect("running lock").is_some() {
-        return Err("회의가 이미 진행 중입니다.".into());
+    if !matches!(*state.session.lock().expect("session lock"), Session::Idle) {
+        return Err("회의가 이미 진행 중이거나 저장하는 중입니다.".into());
     }
     let settings = state.settings();
     let models_dir = state.models_dir.clone();
@@ -289,13 +338,13 @@ pub async fn start_session(
         blocking(move || engine::start(&settings, title, &models_dir, &bundled_dir, &store, sink))
             .await?;
     let meta = running.meta.clone();
-    let mut slot = state.running.lock().expect("running lock");
-    if slot.is_some() {
+    let mut slot = state.session.lock().expect("session lock");
+    if !matches!(*slot, Session::Idle) {
         drop(slot);
         let _ = engine::stop(running);
-        return Err("회의가 이미 진행 중입니다.".into());
+        return Err("회의가 이미 진행 중이거나 저장하는 중입니다.".into());
     }
-    *slot = Some(running);
+    *slot = Session::Running(Box::new(running));
     let _ = app.emit(
         "session-state",
         SessionState {
@@ -309,13 +358,15 @@ pub async fn start_session(
 
 #[tauri::command]
 pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> CmdResult<SessionSummary> {
-    let running = state
-        .running
-        .lock()
-        .expect("running lock")
-        .take()
-        .ok_or("진행 중인 회의가 없습니다.")?;
-    let result = blocking(move || engine::stop(running)).await;
+    let running = state.begin_stop().ok_or_else(|| {
+        match &*state.session.lock().expect("session lock") {
+            Session::Stopping(_) => "회의를 저장하는 중입니다. 잠시 기다리십시오.",
+            _ => "진행 중인 회의가 없습니다.",
+        }
+        .to_string()
+    })?;
+    let app2 = app.clone();
+    let result = blocking(move || app2.state::<AppState>().finish_stop(running)).await;
     let _ = app.emit(
         "session-state",
         SessionState {
@@ -351,14 +402,8 @@ pub fn update_session_meta(state: State<'_, AppState>, meta: SessionMeta) -> Cmd
 
 #[tauri::command]
 pub fn delete_session(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let running_id = state
-        .running
-        .lock()
-        .expect("running lock")
-        .as_ref()
-        .map(|r| r.meta.id.clone());
-    if running_id.as_deref() == Some(id.as_str()) {
-        return Err("진행 중인 회의는 지울 수 없습니다. 먼저 중지하십시오.".into());
+    if state.session.lock().expect("session lock").id() == Some(id.as_str()) {
+        return Err("진행 중이거나 저장하는 중인 회의는 지울 수 없습니다.".into());
     }
     state.store().delete(&id).map_err(err)
 }
@@ -378,6 +423,16 @@ pub fn export_session(
 #[cfg(test)]
 mod tests {
     use super::check_base_url;
+
+    #[test]
+    fn a_stopping_session_keeps_its_id_protected() {
+        use super::Session;
+        assert_eq!(Session::Idle.id(), None);
+        assert_eq!(
+            Session::Stopping("20261108-101500-ab12".into()).id(),
+            Some("20261108-101500-ab12")
+        );
+    }
 
     #[test]
     fn base_url_without_credentials() {

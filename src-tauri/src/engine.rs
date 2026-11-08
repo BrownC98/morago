@@ -266,7 +266,10 @@ pub fn start(
     };
     if running.captures.is_empty() {
         let msg = errors.join(" / ");
+        // No audio came in: do not leave an empty record behind.
+        let id = running.meta.id.clone();
         let _ = stop(running);
+        let _ = store.delete(&id);
         anyhow::bail!("소리를 받을 수 없습니다: {msg}");
     }
     Ok(running)

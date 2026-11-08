@@ -55,6 +55,8 @@ export interface App {
   startedAt: string | null;
   meta: SessionMeta | null;
   starting: boolean;
+  /** Stop pressed: the core finishes queued speech and translations. */
+  stopping: boolean;
   utterances: Utterance[];
   /** Live text of speech that has not ended: one per source. */
   partials: Partial<Record<SourceKind, PartialText>>;
@@ -120,6 +122,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const [meta, setMeta] = useState<SessionMeta | null>(null);
   const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [utterances, setUtterances] = useState<Utterance[]>([]);
   const [levels, setLevels] = useState<Record<SourceKind, number>>({ mic: 0, system: 0 });
   const [partials, setPartials] = useState<App["partials"]>({});
@@ -286,6 +289,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopSession = useCallback(async () => {
+    setStopping(true);
     try {
       const sum = await api.stopSession();
       setRunning(false);
@@ -297,6 +301,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     } catch (e) {
       notify("error", errText(e));
+    } finally {
+      setStopping(false);
     }
   }, [bumpSessions, notify, openRecord]);
 
@@ -323,6 +329,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       startedAt,
       meta,
       starting,
+      stopping,
       utterances,
       partials,
       engineErrors,
@@ -354,6 +361,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       startedAt,
       meta,
       starting,
+      stopping,
       utterances,
       partials,
       engineErrors,

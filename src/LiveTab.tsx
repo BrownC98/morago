@@ -138,9 +138,14 @@ export function LiveTab({ active }: { active: boolean }) {
             options={langs.map((c) => ({ value: c, label: languageName(c) }))}
           />
           {running ? (
-            <button type="button" className="ab stop" onClick={() => void app.stopSession()}>
+            <button
+              type="button"
+              className="ab stop"
+              disabled={app.stopping}
+              onClick={() => void app.stopSession()}
+            >
               <Icon name="stop" />
-              중지하고 저장
+              {app.stopping ? "남은 발화를 저장하는 중…" : "중지하고 저장"}
             </button>
           ) : (
             <button
