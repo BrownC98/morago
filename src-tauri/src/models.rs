@@ -138,7 +138,10 @@ const SPECS: &[Spec] = &[
         name: "Silero VAD",
         note: "음성 구간 검출",
         files: &[FileSpec {
-            url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+            // k2-fsa/sherpa-onnx release "asr-models", asset silero_vad.onnx, through
+            // the API: github.com/…/releases/download answered 504 on 2026-11-08
+            // while the API worked.
+            url: "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/271935959",
             name: VAD_FILE,
             size: 643_854,
         }],
@@ -265,6 +268,8 @@ fn fetch_files(
     cancel: &AtomicBool,
 ) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::builder()
+        // The GitHub API refuses requests without a User-Agent.
+        .user_agent(concat!("morago/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         // The blocking client has a 30 s total timeout by default: off for big files.
         .timeout(None::<Duration>)
@@ -293,7 +298,12 @@ fn fetch_files(
         if cancel.load(Ordering::Relaxed) {
             bail!("다운로드를 취소했습니다.");
         }
-        let mut resp = client.get(file.url).send().map_err(|e| {
+        let mut req = client.get(file.url);
+        if file.url.starts_with("https://api.github.com/") {
+            // GitHub release asset through the API: asks for the file, not its JSON.
+            req = req.header(reqwest::header::ACCEPT, "application/octet-stream");
+        }
+        let mut resp = req.send().map_err(|e| {
             anyhow::anyhow!(
                 "모델 서버에 연결할 수 없습니다: {}. 인터넷 연결을 확인하세요.",
                 e.without_url()
