@@ -2733,6 +2733,7 @@ dependencies = [
  "chrono",
  "cpal",
  "crossbeam-channel",
+ "dirs",
  "env_logger",
  "hound",
  "keyring-core",

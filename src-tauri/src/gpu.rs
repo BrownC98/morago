@@ -2,8 +2,10 @@
 //! - Windows: CUDA on NVIDIA GPUs. The CUDA runtime DLLs are not in the
 //!   installer: the "GPU 구성 요소" pack downloads them from NVIDIA on demand
 //!   (`download_pack`). build.rs delay-loads them, so the app starts and runs
-//!   on the CPU without them. A pack installed while the app runs takes effect
-//!   after a restart: ggml finds its CUDA devices once per process.
+//!   on the CPU without them. The first load comes before `main` (nvcc kernel
+//!   registration in static constructors), so the delay-load hook finds the
+//!   pack by its fixed folder (`app_dir`). A pack installed while the app runs
+//!   takes effect after a restart.
 //! - macOS: Metal. Linux (development only): CPU.
 //!
 //! On CUDA a failed GPU allocation can abort the process (ggml `CUDA_CHECK`),
@@ -97,6 +99,12 @@ const PACK_FILES: &[PackFile] = &[
 const DRIVER_NOTE: &str = "NVIDIA 드라이버 528.33 이상(RTX 50 시리즈는 570.65 이상)이 필요합니다.";
 pub const CHOOSE_OTHER: &str = "설정 › GPU 가속에서 다른 GPU나 「끔」을 고른 뒤 다시 시작하세요.";
 
+/// The app data folder `gpu`, as Tauri `app_data_dir` gives it: the roaming
+/// data folder and the identifier of tauri.conf.json.
+pub fn app_dir() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("com.morago.app").join("gpu"))
+}
+
 /// Folder of the pack DLLs, under the app data folder `gpu`.
 fn pack_bin(gpu_dir: &Path) -> PathBuf {
     gpu_dir.join(PACK_ID).join("bin")
@@ -110,24 +118,14 @@ fn pack_installed(gpu_dir: &Path) -> bool {
 }
 
 static GPU_DIR: OnceLock<PathBuf> = OnceLock::new();
-/// The loader finds the pack DLLs (set once at start).
+/// The delay-load hook loaded the CUDA runtime from the pack.
 static PACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// At app start, before any llama.cpp call: makes the pack DLLs visible to
-/// the loader when the pack is installed.
+/// At app start: the folder for `status` and `place`. It must be `app_dir()`.
 pub fn init(gpu_dir: &Path) {
     let _ = GPU_DIR.set(gpu_dir.to_path_buf());
     #[cfg(windows)]
-    {
-        std::hint::black_box(delayload::keep());
-        if pack_installed(gpu_dir) {
-            if win::set_dll_directory(&pack_bin(gpu_dir)) {
-                PACK_ACTIVE.store(true, Ordering::Relaxed);
-            } else {
-                log::warn!("SetDllDirectoryW failed; GPU pack not used");
-            }
-        }
-    }
+    std::hint::black_box(delayload::keep());
 }
 
 /// Downloads the NVIDIA archives (pinned SHA-256), takes the DLLs out and
@@ -520,18 +518,27 @@ mod win {
     unsafe extern "system" {
         fn LoadLibraryW(name: *const u16) -> *mut c_void;
         fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
-        fn SetDllDirectoryW(path: *const u16) -> i32;
+        fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
     }
 
     fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
         s.encode_wide().chain(std::iter::once(0)).collect()
     }
 
-    /// Adds `dir` to the DLL search path of the process (before System32 and PATH).
-    pub fn set_dll_directory(dir: &Path) -> bool {
-        let dir = wide(dir.as_os_str());
-        // SAFETY: a NUL-terminated wide string.
-        unsafe { SetDllDirectoryW(dir.as_ptr()) != 0 }
+    /// Loads a DLL by its full path. Its own imports (cublasLt for cuBLAS)
+    /// come from the same folder (LOAD_WITH_ALTERED_SEARCH_PATH).
+    pub fn load_library(path: &Path) -> Option<*mut c_void> {
+        const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
+        let path = wide(path.as_os_str());
+        // SAFETY: a NUL-terminated wide string; no file handle.
+        let module = unsafe {
+            LoadLibraryExW(
+                path.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_WITH_ALTERED_SEARCH_PATH,
+            )
+        };
+        (!module.is_null()).then_some(module)
     }
 
     pub struct Card {
@@ -618,13 +625,16 @@ mod win {
 
 #[cfg(windows)]
 mod delayload {
-    //! Failure hook of the MSVC delay-load helper (build.rs `/DELAYLOAD`).
-    //! Without it a missing CUDA DLL raises an exception at the first call and
-    //! the process ends. The hook gives the helper the exe module (the load
-    //! "succeeds") and, for each function, a stub that returns error 100
-    //! (cudaErrorNoDevice, CUDA_ERROR_NO_DEVICE). ggml then finds no CUDA
-    //! device and llama.cpp uses the CPU. Proven in R1 (test crate t1).
+    //! Hooks of the MSVC delay-load helper (build.rs `/DELAYLOAD`).
+    //! - Notify hook: the CUDA runtime and cuBLAS come only from the pack
+    //!   folder, never from PATH. Without the pack it gives the exe module.
+    //! - Failure hook: without it a missing DLL or function raises an
+    //!   exception at the first call and the process ends. The hook gives the
+    //!   exe module (the load "succeeds") and, for each function, a stub that
+    //!   returns error 100 (cudaErrorNoDevice, CUDA_ERROR_NO_DEVICE). ggml then
+    //!   finds no CUDA device and llama.cpp uses the CPU. Proven in R1 (t1).
     use std::ffi::{CStr, c_char, c_void};
+    use std::sync::atomic::Ordering;
 
     #[repr(C)]
     struct DelayLoadInfo {
@@ -645,8 +655,45 @@ mod delayload {
         fn GetModuleHandleW(name: *const u16) -> isize;
     }
 
+    const PRE_LOAD_LIB: u32 = 1;
     const FAIL_LOAD_LIB: u32 = 3;
     const FAIL_GET_PROC: u32 = 4;
+
+    fn exe_module() -> *const c_void {
+        // SAFETY: a null name gives the exe module.
+        unsafe { GetModuleHandleW(std::ptr::null()) as *const c_void }
+    }
+
+    /// A pack DLL from the pack folder, else the exe module (stubs).
+    fn from_pack(dll: &str) -> *const c_void {
+        let module = super::app_dir()
+            .filter(|d| super::pack_installed(d))
+            .and_then(|d| super::win::load_library(&super::pack_bin(&d).join(dll)));
+        match module {
+            Some(m) => {
+                super::PACK_ACTIVE.store(true, Ordering::Relaxed);
+                m
+            }
+            None => exe_module(),
+        }
+    }
+
+    unsafe extern "system" fn notify_hook(
+        notify: u32,
+        info: *const DelayLoadInfo,
+    ) -> *const c_void {
+        if notify != PRE_LOAD_LIB {
+            return std::ptr::null();
+        }
+        // SAFETY: the delay-load helper passes a valid info block with a
+        // NUL-terminated DLL name.
+        let dll = unsafe { CStr::from_ptr((*info).dll) }.to_string_lossy();
+        match dll.to_ascii_lowercase().as_str() {
+            "cudart64_12.dll" | "cublas64_12.dll" => from_pack(&dll),
+            // nvcuda.dll: the driver, from System32.
+            _ => std::ptr::null(),
+        }
+    }
 
     unsafe extern "system" fn no_device() -> i32 {
         100
@@ -660,8 +707,7 @@ mod delayload {
         // SAFETY: the delay-load helper passes a valid info block.
         let info = unsafe { &*info };
         match notify {
-            // SAFETY: a null name gives the exe module.
-            FAIL_LOAD_LIB => unsafe { GetModuleHandleW(std::ptr::null()) as *const c_void },
+            FAIL_LOAD_LIB => exe_module(),
             FAIL_GET_PROC => {
                 let name = if info.by_name != 0 && !info.name.is_null() {
                     // SAFETY: the import name is NUL-terminated.
@@ -678,14 +724,20 @@ mod delayload {
         }
     }
 
-    /// The helper in delayimp.lib reads this symbol.
+    /// The helper in delayimp.lib reads these symbols.
+    #[unsafe(no_mangle)]
+    #[allow(non_upper_case_globals)]
+    static __pfnDliNotifyHook2: Hook = notify_hook;
     #[unsafe(no_mangle)]
     #[allow(non_upper_case_globals)]
     static __pfnDliFailureHook2: Hook = hook;
 
-    /// A reference that keeps the hook in the link.
-    pub fn keep() -> *const c_void {
-        (&raw const __pfnDliFailureHook2).cast()
+    /// A reference that keeps the hooks in the link.
+    pub fn keep() -> [*const c_void; 2] {
+        [
+            (&raw const __pfnDliNotifyHook2).cast(),
+            (&raw const __pfnDliFailureHook2).cast(),
+        ]
     }
 }
 
@@ -797,6 +849,20 @@ mod tests {
             std::fs::write(bin.join(f.name), b"short").unwrap();
         }
         assert!(!pack_installed(dir.path()));
+    }
+
+    #[test]
+    fn app_dir_is_the_tauri_app_data_folder() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let dir = app_dir().unwrap();
+        assert_eq!(dir.file_name().unwrap(), "gpu");
+        assert_eq!(
+            dir.parent().unwrap(),
+            dirs::data_dir()
+                .unwrap()
+                .join(conf["identifier"].as_str().unwrap())
+        );
     }
 
     /// Run: `MORAGO_TEST_GPU_DIR=<dir> cargo test --lib gpu::tests::pack_downloads -- --ignored --nocapture`

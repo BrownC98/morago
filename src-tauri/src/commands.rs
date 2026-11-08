@@ -64,7 +64,7 @@ impl AppState {
         let path = app.path();
         let settings_path = path.app_config_dir()?.join("settings.json");
         let models_dir = path.app_data_dir()?.join("models");
-        let gpu_dir = path.app_data_dir()?.join("gpu");
+        let gpu_dir = gpu::app_dir().ok_or_else(|| anyhow::anyhow!("no app data folder"))?;
         gpu::init(&gpu_dir);
         let bundled_dir = path.resource_dir()?.join("models");
         let default_sessions_dir = path

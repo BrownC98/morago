@@ -45,6 +45,8 @@ llama-cpp-sys-2 = "0.1.161"
 sha2 = "0.11"
 # Unpacks the NVIDIA CUDA archives of the "GPU 구성 요소" pack (gpu.rs).
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# The GPU pack folder before Tauri starts (gpu.rs); Tauri uses the same crate.
+dirs = "7"
 
 # OS credential stores for API keys (secrets.rs). Linux is for development only.
 [target.'cfg(target_os = "windows")'.dependencies]

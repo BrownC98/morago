@@ -21,7 +21,7 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 - Never write an API key to settings, logs, session files, exports or error text. Use `secrets::Secret`.
 - Change `types.rs` and module signatures only with the coordinator's approval.
 - Windows link: sherpa-onnx prebuilt libs use the static CRT (/MT); `src-tauri/.cargo/config.toml` builds llama.cpp the same way. Do not delete it.
-- Windows CUDA: the installer has no CUDA DLL. `build.rs` delay-loads them (`/DELAYLOAD`); `gpu.rs` has the failure hook and loads the pack with `SetDllDirectoryW` at start. A new static import of a CUDA DLL stops the app on PCs without one; the test `cuda_dlls_are_delay_loaded` checks this. A CUDA out-of-memory error ends the process: check free GPU memory before a load or a context (`gpu::place`, `translate/local.rs`).
+- Windows CUDA: the installer has no CUDA DLL. `build.rs` delay-loads them (`/DELAYLOAD`); `gpu.rs` has the delay-load hooks: they load the pack DLLs from `gpu::app_dir()` (the first load comes before `main`), else stubs. A new static import of a CUDA DLL stops the app on PCs without one; the test `cuda_dlls_are_delay_loaded` checks this. A CUDA out-of-memory error ends the process: check free GPU memory before a load or a context (`gpu::place`, `translate/local.rs`).
 - macOS: minimum 14.2 (Core Audio tap API); system audio is gated at 14.6 at run time. `build.rs` links libclang_rt.osx for llama.cpp Metal.
 - Linux is dev-only: onnxruntime + llama.cpp in one process abort on Linux (std::regex clash). Run model tests on Windows/macOS CI (job `e2e`).
 - GitHub release downloads in CI must send the job token (unauthenticated requests got 504 on 2026-11-08); see `.github/actions/sherpa-libs`.

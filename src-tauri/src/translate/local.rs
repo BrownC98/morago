@@ -206,13 +206,11 @@ mod tests {
     /// Run: `LLAMA_LIB_PROFILE=Release cargo test local_model -- --ignored --nocapture`
     /// (a debug build of llama.cpp is about 10x slower). `MORAGO_TEST_GPU=off`
     /// runs on the CPU; else the device follows the 자동 setting.
-    /// `MORAGO_TEST_GPU_DIR`: the folder of an installed GPU pack (Windows).
+    /// The GPU pack comes from the app data folder (`gpu::app_dir`), as in the app.
     #[test]
     #[ignore = "downloads a 3.3 GB model and runs it"]
     fn local_model_translates() {
-        if let Some(d) = std::env::var_os("MORAGO_TEST_GPU_DIR") {
-            gpu::init(Path::new(&d));
-        }
+        gpu::init(&gpu::app_dir().unwrap());
         let dir = ensure_model();
         let setting = match std::env::var("MORAGO_TEST_GPU").as_deref() {
             Ok("off") => GpuSetting::Off,
@@ -259,14 +257,12 @@ mod tests {
 
     /// D2 B without the memory check of `gpu::place`: a model too big for the
     /// GPU gives an error (the meeting does not start), not an abort.
-    /// Run: `MORAGO_TEST_BIG_GGUF=<12B model.gguf> MORAGO_TEST_GPU_DIR=<pack> LLAMA_LIB_PROFILE=Release
+    /// Run: `MORAGO_TEST_BIG_GGUF=<12B model.gguf> LLAMA_LIB_PROFILE=Release
     /// cargo test big_model -- --ignored --nocapture`
     #[test]
     #[ignore = "needs a GPU and a model bigger than its memory"]
     fn big_model_on_the_gpu_fails_cleanly() {
-        if let Some(d) = std::env::var_os("MORAGO_TEST_GPU_DIR") {
-            gpu::init(Path::new(&d));
-        }
+        gpu::init(&gpu::app_dir().unwrap());
         let gguf = std::path::PathBuf::from(std::env::var_os("MORAGO_TEST_BIG_GGUF").unwrap());
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("big")).unwrap();
