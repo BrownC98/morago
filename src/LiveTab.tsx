@@ -42,6 +42,7 @@ const STAGE_NAME: Record<EngineStage, string> = {
   translate: "번역",
   store: "저장",
   model: "모델",
+  notice: "알림",
 };
 
 export function LiveTab({ active }: { active: boolean }) {

@@ -90,7 +90,7 @@ export interface DownloadProgress {
 }
 
 export type KeyRole = "asr" | "translate";
-export type EngineStage = "capture" | "asr" | "translate" | "store" | "model";
+export type EngineStage = "capture" | "asr" | "translate" | "store" | "model" | "notice";
 
 export interface PartialText {
   source: SourceKind;
