@@ -14,6 +14,7 @@ use crate::{audio, models};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -159,8 +160,8 @@ fn start_pipeline(
     let target_language = Arc::new(RwLock::new(settings.target_language.clone()));
 
     let (audio_tx, audio_rx) = bounded::<AudioChunk>(512);
-    let (seg_tx, seg_rx) = unbounded::<SpeechSegment>();
-    let (tr_tx, tr_rx) = unbounded::<Utterance>();
+    let (seg_tx, seg_rx) = backlog(BACKLOG_LIMIT_MS, segment_ms);
+    let (tr_tx, tr_rx) = backlog(BACKLOG_LIMIT_MS, utterance_ms);
 
     let mut threads = Vec::new();
     {
@@ -293,12 +294,133 @@ pub fn stop(mut running: Running) -> anyhow::Result<SessionSummary> {
         .ok_or_else(|| anyhow::anyhow!("저장한 회의를 찾을 수 없습니다: {}", running.meta.id))
 }
 
+/// Most audio time a stage queue holds. ASR or translation slower than real
+/// time would else grow memory for the whole meeting.
+const BACKLOG_LIMIT_MS: u64 = 30_000;
+
+/// A queue bounded by the audio time it holds. When it is full, the oldest
+/// item leaves the queue through `on_drop`, so memory stays bounded.
+struct Backlog<T> {
+    tx: Sender<T>,
+    /// Same channel: the producer takes the oldest item out on overflow.
+    oldest: Receiver<T>,
+    queued_ms: Arc<AtomicU64>,
+    limit_ms: u64,
+    ms: fn(&T) -> u64,
+}
+
+/// The consumer side of a `Backlog`.
+struct BacklogRx<T> {
+    rx: Receiver<T>,
+    queued_ms: Arc<AtomicU64>,
+    ms: fn(&T) -> u64,
+}
+
+fn backlog<T>(limit_ms: u64, ms: fn(&T) -> u64) -> (Backlog<T>, BacklogRx<T>) {
+    let (tx, rx) = unbounded();
+    let queued_ms = Arc::new(AtomicU64::new(0));
+    (
+        Backlog {
+            tx,
+            oldest: rx.clone(),
+            queued_ms: queued_ms.clone(),
+            limit_ms,
+            ms,
+        },
+        BacklogRx { rx, queued_ms, ms },
+    )
+}
+
+fn take_ms(queued: &AtomicU64, ms: u64) {
+    let _ = queued.try_update(Ordering::Relaxed, Ordering::Relaxed, |q| {
+        Some(q.saturating_sub(ms))
+    });
+}
+
+impl<T> Backlog<T> {
+    fn push(&self, item: T, on_drop: &mut dyn FnMut(T)) {
+        let ms = (self.ms)(&item);
+        while self.queued_ms.load(Ordering::Relaxed) + ms > self.limit_ms {
+            match self.oldest.try_recv() {
+                Ok(old) => {
+                    take_ms(&self.queued_ms, (self.ms)(&old));
+                    on_drop(old);
+                }
+                Err(_) => break,
+            }
+        }
+        self.queued_ms.fetch_add(ms, Ordering::Relaxed);
+        let _ = self.tx.send(item);
+    }
+}
+
+impl<T> BacklogRx<T> {
+    fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        self.rx
+            .iter()
+            .inspect(|item| take_ms(&self.queued_ms, (self.ms)(item)))
+    }
+}
+
+/// Tells the user about dropped work: at once, then at most every 10 s.
+struct DropWarning {
+    stage: &'static str,
+    text: &'static str,
+    count: u64,
+    last: Option<Instant>,
+}
+
+impl DropWarning {
+    fn new(stage: &'static str, text: &'static str) -> Self {
+        Self {
+            stage,
+            text,
+            count: 0,
+            last: None,
+        }
+    }
+
+    fn dropped(&mut self, source: SourceKind, sink: &dyn Sink) {
+        self.count += 1;
+        if self
+            .last
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(10))
+        {
+            self.last = Some(Instant::now());
+            sink.error(
+                self.stage,
+                Some(source),
+                &format!("{} 건너뛴 발화: {}개.", self.text, self.count),
+            );
+        }
+    }
+}
+
+fn segment_ms(s: &SpeechSegment) -> u64 {
+    s.end_ms.saturating_sub(s.start_ms)
+}
+
+fn utterance_ms(u: &Utterance) -> u64 {
+    u.end_ms.saturating_sub(u.start_ms)
+}
+
 fn vad_loop(
     rx: Receiver<AudioChunk>,
     mut vads: Vec<(SourceKind, Vad)>,
-    tx: Sender<SpeechSegment>,
+    tx: Backlog<SpeechSegment>,
     sink: Arc<dyn Sink>,
 ) {
+    let mut warning = DropWarning::new(
+        "asr",
+        "인식이 밀립니다: 설정에서 더 작은 음성 인식 모델을 고르세요.",
+    );
+    let mut on_drop = |seg: SpeechSegment| {
+        log::warn!(
+            "ASR backlog full: dropped {} ms of speech",
+            segment_ms(&seg)
+        );
+        warning.dropped(seg.source, sink.as_ref());
+    };
     let mut last_level = [Instant::now(), Instant::now()];
     for chunk in rx.iter() {
         let i = chunk.source as usize;
@@ -308,13 +430,13 @@ fn vad_loop(
         }
         if let Some((_, vad)) = vads.iter_mut().find(|(s, _)| *s == chunk.source) {
             for seg in vad.push(&chunk) {
-                let _ = tx.send(seg);
+                tx.push(seg, &mut on_drop);
             }
         }
     }
     for (_, vad) in vads.iter_mut() {
         for seg in vad.flush() {
-            let _ = tx.send(seg);
+            tx.push(seg, &mut on_drop);
         }
     }
 }
@@ -332,14 +454,32 @@ fn append(writer: &Mutex<Option<SessionWriter>>, u: &Utterance, sink: &dyn Sink)
 }
 
 fn asr_loop(
-    rx: Receiver<SpeechSegment>,
+    rx: BacklogRx<SpeechSegment>,
     mut asr: Box<dyn speech::Asr>,
     mut diarizer: Option<Diarizer>,
-    tx: Sender<Utterance>,
+    tx: Backlog<Utterance>,
     writer: Arc<Mutex<Option<SessionWriter>>>,
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
 ) {
+    let mut warning = DropWarning::new(
+        "translate",
+        "번역이 밀립니다: 설정에서 더 작은 번역 모델을 고르세요.",
+    );
+    // An utterance that leaves the full translation queue keeps its original
+    // text in the record and gets a Failed translation.
+    let mut on_drop = |mut u: Utterance| {
+        log::warn!(
+            "translation backlog full: utterance {} not translated",
+            u.id
+        );
+        u.translation = TranslationState::Failed {
+            message: "번역이 밀려 건너뛰었습니다.".into(),
+        };
+        sink.utterance(&u);
+        append(&writer, &u, sink.as_ref());
+        warning.dropped(u.source, sink.as_ref());
+    };
     let mut next_id = 1u64;
     for seg in rx.iter() {
         let transcript = match asr.transcribe(&seg) {
@@ -380,13 +520,13 @@ fn asr_loop(
         sink.utterance(&u);
         append(&writer, &u, sink.as_ref());
         if translate {
-            let _ = tx.send(u);
+            tx.push(u, &mut on_drop);
         }
     }
 }
 
 fn translate_loop(
-    rx: Receiver<Utterance>,
+    rx: BacklogRx<Utterance>,
     mut translator: Box<dyn translate::Translator>,
     writer: Arc<Mutex<Option<SessionWriter>>>,
     target: Arc<RwLock<String>>,
@@ -436,6 +576,63 @@ mod tests {
     fn rms_of_constant_signal() {
         assert_eq!(rms(&[]), 0.0);
         assert!((rms(&[0.5, -0.5, 0.5, -0.5]) - 0.5).abs() < 1e-6);
+    }
+
+    fn seg(i: u64) -> SpeechSegment {
+        SpeechSegment {
+            source: SourceKind::System,
+            start_ms: i * 1000,
+            end_ms: i * 1000 + 1000,
+            samples: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_full_backlog_drops_the_oldest_and_stays_bounded() {
+        let (tx, rx) = backlog(5_000, segment_ms);
+        let mut dropped = Vec::new();
+        for i in 0..12 {
+            tx.push(seg(i), &mut |s| dropped.push(s.start_ms / 1000));
+            assert!(tx.queued_ms.load(Ordering::Relaxed) <= 5_000);
+        }
+        drop(tx);
+        let kept: Vec<u64> = rx.iter().map(|s| s.start_ms / 1000).collect();
+        assert_eq!(dropped, (0..7).collect::<Vec<_>>());
+        assert_eq!(kept, (7..12).collect::<Vec<_>>());
+        assert_eq!(rx.queued_ms.load(Ordering::Relaxed), 0);
+    }
+
+    /// A consumer slower than real time: the queue never holds more than the
+    /// limit, every item is either processed or dropped, and the user is told.
+    #[test]
+    fn slow_asr_drops_work_and_warns_instead_of_growing() {
+        let (tx, rx) = backlog(3_000, segment_ms);
+        let consumer = std::thread::spawn(move || {
+            let mut done = 0u64;
+            for _ in rx.iter() {
+                std::thread::sleep(Duration::from_millis(20)); // "slow ASR"
+                done += 1;
+            }
+            done
+        });
+        let recorder = Recorder::default();
+        let mut warning = DropWarning::new("asr", "인식이 밀립니다.");
+        let mut dropped = 0u64;
+        for i in 0..100 {
+            tx.push(seg(i), &mut |s| {
+                dropped += 1;
+                warning.dropped(s.source, &recorder);
+            });
+            assert!(tx.queued_ms.load(Ordering::Relaxed) <= 3_000);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(tx);
+        let done = consumer.join().unwrap();
+        assert!(dropped > 0);
+        assert_eq!(done + dropped, 100);
+        let errors = recorder.errors.lock().unwrap();
+        assert_eq!(errors.len(), 1, "one warning within 10 s: {errors:?}");
+        assert!(errors[0].contains("인식이 밀립니다"), "{errors:?}");
     }
 
     /// Records engine output for tests.
