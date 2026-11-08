@@ -4,7 +4,7 @@
 use crate::engine::{self, Running};
 use crate::models::{self, ModelInfo};
 use crate::secrets::{self, Role};
-use crate::settings::{self, Settings};
+use crate::settings::{self, AsrConfig, Settings, TranslateConfig};
 use crate::speech;
 use crate::store::SessionStore;
 use crate::translate;
@@ -94,11 +94,39 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 
 #[tauri::command]
 pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResult<()> {
+    if let AsrConfig::Custom { endpoint } = &settings.asr {
+        check_base_url(&endpoint.base_url)?;
+    }
+    if let TranslateConfig::Custom { endpoint } = &settings.translate {
+        check_base_url(&endpoint.base_url)?;
+    }
     settings::save(&state.settings_path, &settings).map_err(err)?;
     if let Some(r) = state.running.lock().expect("running lock").as_ref() {
         *r.target_language.write().expect("target lock") = settings.target_language.clone();
     }
     *state.settings.lock().expect("settings lock") = settings;
+    Ok(())
+}
+
+/// A base URL is saved in plain text, so it must not carry credentials.
+/// An empty URL is allowed while the user fills in the form.
+fn check_base_url(url: &str) -> CmdResult<()> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Ok(());
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
+        format!("서비스 주소가 올바르지 않습니다: {url}. 예: https://api.openai.com/v1")
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("서비스 주소는 http:// 또는 https://로 시작해야 합니다.".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.query().is_some() {
+        return Err(
+            "서비스 주소에 사용자 이름, 비밀번호, 키(?key=…)를 넣지 마십시오. API 키 칸에 넣으십시오."
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -358,4 +386,20 @@ pub fn export_session(
     let text = state.store().export(&id, format).map_err(err)?;
     std::fs::write(&path, text)
         .map_err(|e| format!("파일을 쓰지 못했습니다({}): {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_base_url;
+
+    #[test]
+    fn base_url_without_credentials() {
+        assert!(check_base_url("").is_ok());
+        assert!(check_base_url("https://api.openai.com/v1").is_ok());
+        assert!(check_base_url("http://localhost:11434/v1").is_ok());
+        assert!(check_base_url("https://user:pw@example.com/v1").is_err());
+        assert!(check_base_url("https://example.com/v1?key=abc").is_err());
+        assert!(check_base_url("ftp://example.com").is_err());
+        assert!(check_base_url("example.com").is_err());
+    }
 }
