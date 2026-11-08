@@ -4,12 +4,59 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a work branch cancels its older run. Runs on master and
+# gate/* branches always finish (the merge gate waits for them).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/heads/gate/') }}
+
+env:
+  # Only the integration branch and master save the Rust cache; work branches restore it.
+  SAVE_CACHE: ${{ github.ref_name == '회의번역앱' || github.ref_name == 'master' }}
 
 jobs:
-  build:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: check
+          save-if: ${{ env.SAVE_CACHE == 'true' }}
+      - run: pnpm install --frozen-lockfile
+      - name: Frontend check
+        run: pnpm build
+      - name: Rust format
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: Rust lint
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: OS credential store round-trip
+        working-directory: src-tauri
+        run: cargo test secrets -- --ignored
+
+  # Installers (NSIS, dmg) only on the integration branch, master and gate/*.
+  bundle:
+    if: ${{ github.ref_name == '회의번역앱' || github.ref_name == 'master' || startsWith(github.ref_name, 'gate/') }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,26 +76,12 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: bundle
+          save-if: ${{ env.SAVE_CACHE == 'true' }}
       - run: pnpm install --frozen-lockfile
-      - name: Frontend check
-        run: pnpm build
-      - name: Rust format
-        working-directory: src-tauri
-        run: cargo fmt --check
-      - name: Rust lint
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test
-      - name: OS credential store round-trip
-        working-directory: src-tauri
-        run: cargo test secrets -- --ignored
       - name: Build app
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
       - uses: actions/upload-artifact@v4
