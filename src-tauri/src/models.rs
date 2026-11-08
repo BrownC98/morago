@@ -80,9 +80,16 @@ pub fn verify_bundled(dir: &Path) -> anyhow::Result<()> {
 /// File names inside a model folder. `speech` and `translate` read these.
 pub const VAD_FILE: &str = "model.onnx";
 pub const SPEAKER_FILE: &str = "model.onnx";
-pub const WHISPER_ENCODER_FILE: &str = "encoder.int8.onnx";
-pub const WHISPER_DECODER_FILE: &str = "decoder.int8.onnx";
-pub const WHISPER_TOKENS_FILE: &str = "tokens.txt";
+pub const ENCODER_FILE: &str = "encoder.int8.onnx";
+pub const DECODER_FILE: &str = "decoder.int8.onnx";
+pub const TOKENS_FILE: &str = "tokens.txt";
+pub const SENSE_VOICE_FILE: &str = "model.int8.onnx";
+pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
+/// Qwen3-ASR reads its tokenizer files from the model folder.
+pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
+/// Model ids by recognizer type; `speech::local` picks the config by id.
+pub const SENSE_VOICE_ID: &str = "sense-voice-small";
+pub const QWEN3_ASR_ID: &str = "qwen3-asr-0.6b";
 pub const LLM_FILE: &str = "model.gguf";
 
 /// One file of a model: where it comes from and its name in the folder.
@@ -124,7 +131,7 @@ macro_rules! whisper_files {
                     $m,
                     "-encoder.int8.onnx"
                 )),
-                name: WHISPER_ENCODER_FILE,
+                name: ENCODER_FILE,
                 size: $enc,
                 sha256: $enc_sha,
             },
@@ -136,7 +143,7 @@ macro_rules! whisper_files {
                     $m,
                     "-decoder.int8.onnx"
                 )),
-                name: WHISPER_DECODER_FILE,
+                name: DECODER_FILE,
                 size: $dec,
                 sha256: $dec_sha,
             },
@@ -148,7 +155,7 @@ macro_rules! whisper_files {
                     $m,
                     "-tokens.txt"
                 )),
-                name: WHISPER_TOKENS_FILE,
+                name: TOKENS_FILE,
                 size: 816_730,
                 sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
             },
@@ -156,12 +163,97 @@ macro_rules! whisper_files {
     };
 }
 
+// Error rates in the notes: CER % (ko, ja, zh) and WER % (en), FLEURS clips,
+// CPU bake-off of 2026-11-08 (research-cpu-asr.md of the coordinator task).
 const SPECS: &[Spec] = &[
+    // SenseVoice-Small int8, FunASR Model License. Package 2024-07-17: the int8
+    // file of 2025-09-09 breaks ko, ja and en.
+    Spec {
+        id: SENSE_VOICE_ID,
+        kind: ModelKind::Asr,
+        name: "SenseVoice Small",
+        note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7",
+        files: &[
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx"
+                ),
+                name: SENSE_VOICE_FILE,
+                size: 239_233_841,
+                sha256: "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt"
+                ),
+                name: TOKENS_FILE,
+                size: 315_894,
+                sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+            },
+        ],
+    },
+    // Qwen3-ASR 0.6B int8 (Alibaba Qwen, Apache-2.0), sherpa-onnx export.
+    Spec {
+        id: QWEN3_ASR_ID,
+        kind: ModelKind::Asr,
+        name: "Qwen3-ASR 0.6B",
+        note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1",
+        files: &[
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/conv_frontend.onnx"
+                ),
+                name: QWEN3_FRONTEND_FILE,
+                size: 44_148_281,
+                sha256: "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/encoder.int8.onnx"
+                ),
+                name: ENCODER_FILE,
+                size: 182_491_662,
+                sha256: "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/decoder.int8.onnx"
+                ),
+                name: DECODER_FILE,
+                size: 755_914_231,
+                sha256: "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/vocab.json"
+                ),
+                name: QWEN3_TOKENIZER_FILES[0],
+                size: 2_776_833,
+                sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/merges.txt"
+                ),
+                name: QWEN3_TOKENIZER_FILES[1],
+                size: 1_671_853,
+                sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/tokenizer_config.json"
+                ),
+                name: QWEN3_TOKENIZER_FILES[2],
+                size: 12_487,
+                sha256: "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+            },
+        ],
+    },
     Spec {
         id: "whisper-base",
         kind: ModelKind::Asr,
         name: "Whisper base",
-        note: "가장 빠름, 정확도 낮음 (저사양 PC)",
+        note: "빠름, 정확도 낮음",
         files: whisper_files!(
             "base",
             29_120_534,
@@ -174,7 +266,7 @@ const SPECS: &[Spec] = &[
         id: "whisper-small",
         kind: ModelKind::Asr,
         name: "Whisper small",
-        note: "빠름, 정확도 보통 (기본)",
+        note: "SenseVoice보다 느림, 메모리 약 2GB. 오류율 % 한 6.4 · 일 14.4 · 중 12.1 · 영 10.3",
         files: whisper_files!(
             "small",
             112_442_483,
@@ -200,7 +292,7 @@ const SPECS: &[Spec] = &[
         id: "whisper-turbo",
         kind: ModelKind::Asr,
         name: "Whisper turbo",
-        note: "느림, 정확도 가장 높음 (고사양 PC)",
+        note: "정확도 높음, CPU에서는 실시간보다 느릴 수 있음, 메모리 3GB 이상. 오류율 % 한 6.8",
         files: whisper_files!(
             "turbo",
             674_716_297,
@@ -482,9 +574,12 @@ mod tests {
     fn catalog_has_required_models() {
         let cat = catalog();
         for id in [
+            SENSE_VOICE_ID,
+            QWEN3_ASR_ID,
             "whisper-base",
             "whisper-small",
             "whisper-medium",
+            "whisper-turbo",
             "gemma-4-e2b-it-q4",
             "gemma-4-12b-it-q4",
         ] {
@@ -497,6 +592,20 @@ mod tests {
         assert!(cat.iter().all(|m| m.size_bytes > 0));
         let small = cat.iter().find(|m| m.id == "whisper-small").unwrap();
         assert_eq!(small.size_bytes, 112_442_483 + 262_226_114 + 816_730);
+        let sv = cat.iter().find(|m| m.id == SENSE_VOICE_ID).unwrap();
+        assert_eq!(sv.size_bytes, 239_233_841 + 315_894);
+        // The 2024-07-17 int8 file: the 2025-09-09 one breaks ko, ja and en.
+        let sv_spec = SPECS.iter().find(|s| s.id == SENSE_VOICE_ID).unwrap();
+        assert!(sv_spec.files[0].urls[0].contains("-2024-07-17/"));
+        assert_eq!(
+            sv_spec.files[0].sha256,
+            "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        );
+        let qwen = cat.iter().find(|m| m.id == QWEN3_ASR_ID).unwrap();
+        assert_eq!(
+            qwen.size_bytes,
+            44_148_281 + 182_491_662 + 755_914_231 + 2_776_833 + 1_671_853 + 12_487
+        );
     }
 
     #[test]

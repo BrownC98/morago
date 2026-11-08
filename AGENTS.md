@@ -8,7 +8,7 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 - `src-tauri/src/types.rs`: shared data types (contract between modules).
 - `src-tauri/src/audio/`: mic + system audio capture, resample to 16 kHz mono.
 - `src-tauri/src/speech/`: VAD, ASR providers, speaker diarization.
-- `src-tauri/src/models.rs`: downloadable models (Whisper, Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
+- `src-tauri/src/models.rs`: downloadable models (ASR: SenseVoice Small default, Qwen3-ASR 0.6B, Whisper; Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
 - `src-tauri/src/translate/`: translation providers.
 - `src-tauri/src/settings.rs`, `secrets.rs`: settings JSON and API keys in the OS credential store.
 - `src-tauri/src/store/`: session files and export.

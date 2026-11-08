@@ -343,7 +343,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
-          { value: "local", label: role === "asr" ? "이 컴퓨터(로컬 Whisper)" : "이 컴퓨터(로컬 언어 모델)" },
+          { value: "local", label: role === "asr" ? "이 컴퓨터(로컬 음성 인식)" : "이 컴퓨터(로컬 언어 모델)" },
           { value: "custom", label: "사용자 지정 서비스" },
         ]}
       />
@@ -500,6 +500,25 @@ export function SettingsTab({ active }: { active: boolean }) {
                   ]}
                 />
               </div>
+              <div className="fld">
+                <span className="flab" aria-hidden="true">회의 언어</span>
+                <Select
+                  label="회의 언어"
+                  width={340}
+                  value={settings.meeting_language ?? ""}
+                  onChange={(v) => app.updateSettings({ meeting_language: v || null })}
+                  options={[
+                    { value: "", label: "자동 감지" },
+                    { value: "ko", label: "한국어" },
+                    { value: "ja", label: "日本語" },
+                    { value: "zh", label: "中文" },
+                    { value: "en", label: "English" },
+                  ]}
+                />
+              </div>
+              <span className="fhint">
+                한 언어로만 말하는 회의는 언어를 고르면 음성 인식이 더 정확합니다. 다음 회의부터 적용됩니다.
+              </span>
               {systemAudio && !systemAudio.supported ? (
                 <div className="notice" role="note">
                   {systemAudio.reason}
@@ -530,6 +549,12 @@ export function SettingsTab({ active }: { active: boolean }) {
               <ul className="notice-list">
                 <li translate="no">Silero VAD: MIT License, Copyright (c) 2020-present Silero Team</li>
                 <li translate="no">CAM++ speaker embedding (3D-Speaker): Apache License 2.0</li>
+                <li translate="no">
+                  SenseVoice Small (FunAudioLLM, Alibaba Group): FunASR Model License 1.1
+                  (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
+                </li>
+                <li translate="no">Qwen3-ASR 0.6B (Qwen, Alibaba Cloud): Apache License 2.0</li>
+                <li translate="no">Whisper (OpenAI): MIT License</li>
                 <li>
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0
                   (https://ai.google.dev/gemma/docs/gemma_4_license). 모델 파일은 Google의 Hugging Face 저장소에서 바꾸지 않고 내려받습니다.
