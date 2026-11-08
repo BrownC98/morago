@@ -1,0 +1,39 @@
+# UI ↔ core contract (Tauri commands and events)
+
+Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets.rs`. JSON follows their serde attributes. The UI keeps TypeScript copies in `src/api.ts`. Change this file only with the coordinator.
+
+## Commands (`invoke(name, args)`)
+
+| Command | Args | Returns |
+|---|---|---|
+| `get_settings` | – | `Settings` |
+| `save_settings` | `{ settings: Settings }` | – (a running session uses the new `target_language` from the next utterance) |
+| `set_api_key` | `{ role: "asr"\|"translate", baseUrl, key }` | – |
+| `delete_api_key` | `{ role, baseUrl }` | – |
+| `api_key_hint` | `{ role, baseUrl }` | `string \| null` (for example `"••••3f9a"`) |
+| `test_provider` | `{ role }` | `{ ok: boolean, message: string }` (uses the saved settings and key) |
+| `list_mics` | – | `string[]` |
+| `system_audio_support` | – | `{ supported: boolean, reason: string \| null }` |
+| `list_models` | – | `(ModelInfo & { installed: boolean })[]` |
+| `download_model` | `{ id }` | – (returns at once; progress by events) |
+| `cancel_download` | `{ id }` | – |
+| `start_session` | `{ title: string \| null }` | `SessionMeta` |
+| `stop_session` | – | `SessionSummary` |
+| `list_sessions` | – | `SessionSummary[]` (newest first) |
+| `load_session` | `{ id }` | `{ meta: SessionMeta, utterances: Utterance[] }` |
+| `update_session_meta` | `{ meta: SessionMeta }` | – (title, speaker names) |
+| `delete_session` | `{ id }` | – |
+| `export_session` | `{ id, format: "markdown"\|"srt"\|"json", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
+
+Errors: a command rejects with a Korean user-facing string that names the problem and the fix. It never contains an API key.
+
+## Events (`listen(name)`)
+
+| Event | Payload |
+|---|---|
+| `utterance` | `Utterance`. Upsert by `id`: the first event has `translation.state = "pending"`, a later one the result. |
+| `audio-level` | `{ source: "mic"\|"system", rms: number }` (0..1, about 10 per second while running) |
+| `session-state` | `{ running: boolean, sessionId: string \| null, startedAt: string \| null }` |
+| `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model", source: "mic"\|"system"\|null, message: string }` |
+| `model-download` | `DownloadProgress` |
+| `model-download-done` | `{ modelId: string, error: string \| null }` |
