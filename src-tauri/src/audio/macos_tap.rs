@@ -8,23 +8,28 @@
 //!
 //! Not testable without a Mac. CI compiles it; see the manual test steps in the task result.
 
+use super::pipeline::{TapBuffer, host_lag, tap_frames, tap_frames_to_mono};
 use super::worker::Feeder;
-use super::{Event, Running};
+use super::{Event, MAX_CAPTURE_LAG, Running};
 use crossbeam_channel::Sender;
 use objc2::{AnyThread, rc::Retained};
 use objc2_core_audio::{
-    AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
-    AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
-    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
-    AudioObjectGetPropertyData, AudioObjectID, AudioObjectPropertyAddress, CATapDescription,
+    AudioConvertHostTimeToNanos, AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID,
+    AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop, AudioGetCurrentHostTime,
+    AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice,
+    AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectID,
+    AudioObjectPropertyAddress, AudioObjectRemovePropertyListener, CATapDescription,
     CATapMuteBehavior, kAudioAggregateDeviceNameKey, kAudioAggregateDeviceTapAutoStartKey,
-    kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey, kAudioDevicePropertyDeviceUID,
-    kAudioEndPointDeviceIsPrivateKey, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
-    kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, kAudioTapPropertyFormat,
+    kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey,
+    kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID,
+    kAudioDevicePropertyNominalSampleRate, kAudioEndPointDeviceIsPrivateKey,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyElementMain,
+    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioSubTapDriftCompensationKey,
+    kAudioSubTapUIDKey, kAudioTapPropertyFormat,
 };
 use objc2_core_audio_types::{
-    AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp, kAudioFormatLinearPCM,
+    AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp, AudioTimeStampFlags,
+    kAudioFormatLinearPCM,
 };
 use objc2_core_foundation::{
     CFArray, CFDictionary, CFMutableDictionary, CFRetained, CFString, kCFAllocatorDefault,
@@ -41,44 +46,87 @@ type OSStatus = i32;
 
 static INSTANCE: AtomicU32 = AtomicU32::new(0);
 
-/// `kAudioFormatFlagIsFloat` and `kAudioFormatFlagIsNonInterleaved` (CoreAudioBaseTypes.h).
+/// `kAudioFormatFlagIsFloat` (CoreAudioBaseTypes.h).
 const FLAG_FLOAT: u32 = 1;
-const FLAG_NON_INTERLEAVED: u32 = 1 << 5;
+/// Buffers of one IOProc call that are mixed. A tap has one or two.
+const MAX_BUFFERS: usize = 8;
+
+/// `AudioHardwareCreateProcessTap` and `AudioHardwareDestroyProcessTap` exist from macOS 14.2.
+/// They are looked up at run time, after the version check, so this code adds no import of
+/// them and an app that supports macOS 13 still starts there.
+type CreateTap =
+    unsafe extern "C-unwind" fn(Option<&CATapDescription>, *mut AudioObjectID) -> OSStatus;
+type DestroyTap = unsafe extern "C-unwind" fn(AudioObjectID) -> OSStatus;
+
+fn load<T: Copy>(name: &CStr) -> Option<T> {
+    assert_eq!(size_of::<T>(), size_of::<*mut c_void>());
+    // SAFETY: `name` is a valid C string; `dlsym` only reads it.
+    let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+    if symbol.is_null() {
+        return None;
+    }
+    // SAFETY: `T` is a function pointer type of the same size, and the symbol has that signature.
+    Some(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&symbol) })
+}
 
 /// What the IOProc needs. Lives in a `Box` that `TapStream` frees after the IOProc is gone.
 struct IoContext {
     feeder: Feeder,
     rate: u32,
-    non_interleaved: bool,
-    #[allow(dead_code)]
+}
+
+/// What the property listener needs.
+struct ListenerContext {
     events: Sender<Event>,
+    generation: u64,
 }
 
 /// A running tap. Dropping it stops the IOProc and destroys the aggregate device and the tap.
 pub struct TapStream {
     tap_id: AudioObjectID,
+    destroy_tap: DestroyTap,
     aggregate_id: Option<AudioObjectID>,
     proc_id: AudioDeviceIOProcID,
     started: bool,
     context: *mut IoContext,
+    listener: *mut ListenerContext,
+    listening: bool,
     /// The default output device that the tap listens to.
     output_device: AudioObjectID,
+    /// Sample rate of the tap and of the output device when the tap was opened.
+    rate: u32,
+    nominal_rate: f64,
 }
 
-// The raw pointer is owned by this value and used by the IOProc only until `drop` stops it.
+// The raw pointers are owned by this value and used by Core Audio only until `drop` stops them.
 unsafe impl Send for TapStream {}
 
 impl Running for TapStream {
-    /// The default output changed (for example AirPods connected): the tap still listens to
-    /// the old device and would give silence.
+    /// A change that raises no stream error (the listeners also report most of them): another
+    /// default output (AirPods connected), another sample rate (AirPods change to the headset
+    /// profile), or a dead device. The tap would give silence or data at the wrong rate.
     fn stale(&self) -> bool {
-        default_output_device().is_ok_and(|id| id != self.output_device)
+        let moved = default_output_device().is_ok_and(|id| id != self.output_device);
+        let tap_rate = tap_format(self.tap_id).map(|f| f.mSampleRate as u32).ok();
+        let rate_changed = tap_rate.is_some_and(|r| r != self.rate)
+            || device_nominal_rate(self.output_device).is_some_and(|r| r != self.nominal_rate);
+        moved || rate_changed || !device_alive(self.output_device)
     }
 }
 
 impl Drop for TapStream {
     fn drop(&mut self) {
         unsafe {
+            if self.listening {
+                for selector in LISTENED {
+                    let _ = AudioObjectRemovePropertyListener(
+                        self.output_device,
+                        NonNull::from(&address(selector)),
+                        Some(on_device_change),
+                        self.listener.cast::<c_void>(),
+                    );
+                }
+            }
             if let Some(aggregate) = self.aggregate_id {
                 if self.started {
                     let _ = AudioDeviceStop(aggregate, self.proc_id);
@@ -88,15 +136,31 @@ impl Drop for TapStream {
                 }
                 let _ = AudioHardwareDestroyAggregateDevice(aggregate);
             }
-            let _ = AudioHardwareDestroyProcessTap(self.tap_id);
+            let _ = (self.destroy_tap)(self.tap_id);
             if !self.context.is_null() {
                 drop(Box::from_raw(self.context));
+            }
+            if !self.listener.is_null() {
+                drop(Box::from_raw(self.listener));
             }
         }
     }
 }
 
-pub fn open(feeder: Feeder, events: Sender<Event>, _generation: u64) -> anyhow::Result<TapStream> {
+/// Property changes of the output device that end a tap.
+const LISTENED: [u32; 2] = [
+    kAudioDevicePropertyNominalSampleRate,
+    kAudioDevicePropertyDeviceIsAlive,
+];
+
+pub fn open(feeder: Feeder, events: Sender<Event>, generation: u64) -> anyhow::Result<TapStream> {
+    let (create_tap, destroy_tap) = match (
+        load::<CreateTap>(c"AudioHardwareCreateProcessTap"),
+        load::<DestroyTap>(c"AudioHardwareDestroyProcessTap"),
+    ) {
+        (Some(c), Some(d)) => (c, d),
+        _ => anyhow::bail!("{}", super::MACOS_LOOPBACK_REASON),
+    };
     let output_device = default_output_device()?;
     let uid = device_uid(output_device)?;
     let pid = std::process::id();
@@ -120,19 +184,23 @@ pub fn open(feeder: Feeder, events: Sender<Event>, _generation: u64) -> anyhow::
         tap_desc.setExclusive(true); // the (empty) process list is the exclusion list
     }
     let mut tap_id: MaybeUninit<AudioObjectID> = MaybeUninit::uninit();
-    let status =
-        unsafe { AudioHardwareCreateProcessTap(Some(tap_desc.as_ref()), tap_id.as_mut_ptr()) };
+    let status = unsafe { create_tap(Some(tap_desc.as_ref()), tap_id.as_mut_ptr()) };
     check(status, "process tap")?;
     let tap_id = unsafe { tap_id.assume_init() };
 
     // From here on, `stream` destroys what exists if a later step fails.
     let mut stream = TapStream {
         tap_id,
+        destroy_tap,
         aggregate_id: None,
         proc_id: None,
         started: false,
         context: std::ptr::null_mut(),
+        listener: std::ptr::null_mut(),
+        listening: false,
         output_device,
+        rate: 0,
+        nominal_rate: device_nominal_rate(output_device).unwrap_or(0.0),
     };
 
     // 2. The format of the tap (rate and layout).
@@ -140,10 +208,13 @@ pub fn open(feeder: Feeder, events: Sender<Event>, _generation: u64) -> anyhow::
     if format.mFormatID != kAudioFormatLinearPCM
         || format.mFormatFlags & FLAG_FLOAT == 0
         || format.mBitsPerChannel != 32
+        || format.mSampleRate.is_nan()
+        || format.mSampleRate < 1.0
     {
         log::error!("audio System: unexpected tap format {format:?}");
         anyhow::bail!("시스템 소리의 형식을 읽을 수 없습니다.");
     }
+    stream.rate = format.mSampleRate as u32;
     log::info!(
         "audio System: tap {} Hz, {} ch",
         format.mSampleRate,
@@ -164,20 +235,32 @@ pub fn open(feeder: Feeder, events: Sender<Event>, _generation: u64) -> anyhow::
     check(status, "aggregate device")?;
     stream.aggregate_id = Some(aggregate_id);
 
-    // 4. Read it with an IOProc.
-    let context = Box::into_raw(Box::new(IoContext {
+    // 4. Tell the supervisor when the output device changes its rate or dies.
+    stream.listener = Box::into_raw(Box::new(ListenerContext { events, generation }));
+    for selector in LISTENED {
+        let status = unsafe {
+            AudioObjectAddPropertyListener(
+                output_device,
+                NonNull::from(&address(selector)),
+                Some(on_device_change),
+                stream.listener.cast::<c_void>(),
+            )
+        };
+        check(status, "property listener")?;
+        stream.listening = true; // Drop removes both; removing an unset one only returns an error
+    }
+
+    // 5. Read the aggregate device with an IOProc.
+    stream.context = Box::into_raw(Box::new(IoContext {
         feeder,
-        rate: format.mSampleRate as u32,
-        non_interleaved: format.mFormatFlags & FLAG_NON_INTERLEAVED != 0,
-        events,
+        rate: stream.rate,
     }));
-    stream.context = context;
     let mut proc_id: AudioDeviceIOProcID = None;
     let status = unsafe {
         AudioDeviceCreateIOProcID(
             aggregate_id,
             Some(io_proc),
-            context.cast::<c_void>(),
+            stream.context.cast::<c_void>(),
             NonNull::from(&mut proc_id),
         )
     };
@@ -188,12 +271,31 @@ pub fn open(feeder: Feeder, events: Sender<Event>, _generation: u64) -> anyhow::
     Ok(stream)
 }
 
-/// Called by Core Audio on its IO thread: queue the mono block, nothing else.
+/// Called by Core Audio when the output device changes its rate or dies. Sends one event.
+unsafe extern "C-unwind" fn on_device_change(
+    _object: AudioObjectID,
+    _count: u32,
+    _addresses: NonNull<AudioObjectPropertyAddress>,
+    client: *mut c_void,
+) -> OSStatus {
+    // SAFETY: `client` is the `ListenerContext` box of the `TapStream`, freed after the
+    // listeners are removed.
+    let ctx = unsafe { &*(client as *const ListenerContext) };
+    let _ = ctx.events.try_send(Event {
+        generation: ctx.generation,
+        fatal: true,
+        text: "the output device changed its sample rate or stopped".into(),
+    });
+    0
+}
+
+/// Called by Core Audio on its IO thread: queue the mono block, nothing else. No log, no
+/// allocation, no panic path.
 unsafe extern "C-unwind" fn io_proc(
     _device: AudioObjectID,
     _now: NonNull<AudioTimeStamp>,
     input: NonNull<AudioBufferList>,
-    _input_time: NonNull<AudioTimeStamp>,
+    input_time: NonNull<AudioTimeStamp>,
     _output: NonNull<AudioBufferList>,
     _output_time: NonNull<AudioTimeStamp>,
     client: *mut c_void,
@@ -202,51 +304,46 @@ unsafe extern "C-unwind" fn io_proc(
     // stopped and destroyed. Core Audio gives a valid buffer list for the call.
     let ctx = unsafe { &*(client as *const IoContext) };
     let list = unsafe { input.as_ref() };
-    let count = list.mNumberBuffers as usize;
-    let buffers = unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), count) };
-    let frames = if ctx.non_interleaved {
-        buffers
-            .iter()
-            .map(|b| b.mDataByteSize as usize / 4)
-            .min()
-            .unwrap_or(0)
-    } else {
-        buffers.first().map_or(0, |b| {
-            b.mDataByteSize as usize / 4 / (b.mNumberChannels.max(1) as usize)
-        })
-    };
+    let count = (list.mNumberBuffers as usize).min(MAX_BUFFERS);
+    let raw = unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), count) };
+    let mut views = [TapBuffer {
+        channels: 0,
+        data: &[],
+    }; MAX_BUFFERS];
+    for (view, b) in views.iter_mut().zip(raw) {
+        if !b.mData.is_null() && b.mNumberChannels > 0 {
+            view.channels = b.mNumberChannels as usize;
+            // SAFETY: Core Audio gives `mDataByteSize` valid bytes of f32 samples at `mData`.
+            view.data = unsafe {
+                std::slice::from_raw_parts(b.mData as *const f32, b.mDataByteSize as usize / 4)
+            };
+        }
+    }
+    let views = &views[..count];
+    let frames = tap_frames(views);
     if frames == 0 {
         return 0;
     }
-    let block = Duration::from_secs_f64(frames as f64 / f64::from(ctx.rate));
     let now = Instant::now();
-    let start = now.checked_sub(block).unwrap_or(now);
-    ctx.feeder.feed(start, ctx.rate, |mono| {
-        if ctx.non_interleaved {
-            mono.resize(frames, 0.0);
-            for b in buffers {
-                if b.mData.is_null() {
-                    continue;
-                }
-                let data = unsafe { std::slice::from_raw_parts(b.mData as *const f32, frames) };
-                for (m, s) in mono.iter_mut().zip(data) {
-                    *m += *s;
-                }
-            }
-            let scale = 1.0 / buffers.len().max(1) as f32;
-            for m in mono.iter_mut() {
-                *m *= scale;
-            }
-        } else if let Some(b) = buffers.first() {
-            if b.mData.is_null() {
-                return;
-            }
-            let channels = b.mNumberChannels.max(1) as usize;
-            let data =
-                unsafe { std::slice::from_raw_parts(b.mData as *const f32, frames * channels) };
-            super::pipeline::downmix_into(mono, data, channels, |s| s);
-        }
+    let time = unsafe { input_time.as_ref() };
+    let lag = if time.mFlags.contains(AudioTimeStampFlags::HostTimeValid) {
+        // SAFETY: plain clock reads and a unit conversion.
+        let (now_ns, then_ns) = unsafe {
+            (
+                AudioConvertHostTimeToNanos(AudioGetCurrentHostTime()),
+                AudioConvertHostTimeToNanos(time.mHostTime),
+            )
+        };
+        host_lag(now_ns, then_ns, MAX_CAPTURE_LAG)
+    } else {
+        None
+    };
+    let lag = lag.unwrap_or_else(|| {
+        Duration::try_from_secs_f64(frames as f64 / f64::from(ctx.rate)).unwrap_or_default()
     });
+    let start = now.checked_sub(lag).unwrap_or(now);
+    ctx.feeder
+        .feed(start, ctx.rate, |mono| tap_frames_to_mono(views, mono));
     0
 }
 
@@ -310,6 +407,41 @@ fn device_uid(device: AudioObjectID) -> anyhow::Result<Retained<NSString>> {
     }
     // The property is returned retained (create rule): take that reference.
     Ok(unsafe { Retained::from_raw(uid as *mut NSString) }.expect("non-null uid"))
+}
+
+fn device_nominal_rate(device: AudioObjectID) -> Option<f64> {
+    let mut rate: f64 = 0.0;
+    let mut size = size_of::<f64>() as u32;
+    let property = address(kAudioDevicePropertyNominalSampleRate);
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device,
+            NonNull::from(&property),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut rate).cast(),
+        )
+    };
+    (status == 0).then_some(rate)
+}
+
+/// False only when Core Audio says the device is dead; an unreadable property counts as alive.
+fn device_alive(device: AudioObjectID) -> bool {
+    let mut alive: u32 = 1;
+    let mut size = size_of::<u32>() as u32;
+    let property = address(kAudioDevicePropertyDeviceIsAlive);
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device,
+            NonNull::from(&property),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut alive).cast(),
+        )
+    };
+    status != 0 || alive != 0
 }
 
 fn tap_format(tap: AudioObjectID) -> anyhow::Result<AudioStreamBasicDescription> {
@@ -413,5 +545,31 @@ fn aggregate_properties(
             &*NSNumber::initWithBool(NSNumber::alloc(), true) as *const _ as *const c_void,
         );
         CFRetained::cast_unchecked::<CFDictionary>(dict)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The macOS 14.2 symbols must be weak imports (or absent): a strong import stops the app at
+    /// launch on macOS 13. Evidence for the CI log: the matching `nm -m` lines are printed.
+    #[test]
+    fn no_strong_import_of_process_tap_symbols() {
+        let exe = std::env::current_exe().expect("test binary path");
+        let Ok(out) = std::process::Command::new("nm")
+            .arg("-m")
+            .arg(&exe)
+            .output()
+        else {
+            eprintln!("nm is not available: skipped");
+            return;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let lines: Vec<&str> = text.lines().filter(|l| l.contains("ProcessTap")).collect();
+        eprintln!("nm -m ProcessTap lines: {lines:#?}");
+        let strong: Vec<&&str> = lines
+            .iter()
+            .filter(|l| l.contains("(undefined)") && !l.contains("weak"))
+            .collect();
+        assert!(strong.is_empty(), "strong imports: {strong:#?}");
     }
 }

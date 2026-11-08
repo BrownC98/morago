@@ -2,6 +2,11 @@
 //!
 //! The callback side (`Feeder::feed`) never blocks, logs or allocates: sample buffers come from
 //! a fixed pool, a full queue only increments a counter, and the worker reports the counter.
+//!
+//! One exception, accepted: `try_send` on a crossbeam channel can take the channel's internal
+//! waker lock to wake the worker, which is parked in `recv_timeout` most of the time. That lock
+//! is held for a few instructions and only by the worker's park and the callback's wake-up, never
+//! across I/O, so the callback does not wait on anything slow.
 
 use super::pipeline::{Processor, ZeroWatch};
 use super::{ErrorSink, silent_message};
@@ -93,6 +98,9 @@ pub struct Output {
     pub report: ErrorSink,
     /// Set by the worker when nobody reads the chunks any more (the engine stopped).
     pub closing: Arc<AtomicBool>,
+    /// Report a stream that starts with exact zeros (denied permission). Off for macOS system
+    /// audio: the tap delivers zeros while nothing plays, which is normal.
+    pub watch_zeros: bool,
 }
 
 /// Runs until every `Feeder` is gone and the queue is empty. The audio that was already queued
@@ -152,7 +160,7 @@ fn handle(
     watch: &mut ZeroWatch,
     emit: &mut dyn FnMut(AudioChunk),
 ) {
-    if watch.feed(&block.mono, block.rate) {
+    if out.watch_zeros && watch.feed(&block.mono, block.rate) {
         log::warn!("audio {:?}: only digital silence at the start", out.source);
         (out.report)(silent_message(out.source, cfg!(target_os = "macos")));
     }
@@ -201,6 +209,7 @@ mod tests {
             tx,
             report: Arc::new(move |m| r.lock().unwrap().push(m)),
             closing: Arc::new(AtomicBool::new(false)),
+            watch_zeros: true,
         };
         (out, rx, reports)
     }
@@ -271,6 +280,26 @@ mod tests {
         let (out, _rx, reports) = output(SourceKind::Mic, t0);
         run(inbox, &out);
         assert_eq!(reports.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn zero_watch_can_be_off() {
+        let t0 = Instant::now();
+        let (feeder, inbox) = queue();
+        for i in 0..50u32 {
+            feeder.feed(
+                t0 + Duration::from_millis(u64::from(i) * 100),
+                16_000,
+                |v| {
+                    v.extend(std::iter::repeat_n(0.0, 1_600));
+                },
+            );
+        }
+        drop(feeder);
+        let (mut out, _rx, reports) = output(SourceKind::System, t0);
+        out.watch_zeros = false;
+        run(inbox, &out);
+        assert!(reports.lock().unwrap().is_empty());
     }
 
     #[test]

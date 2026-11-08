@@ -40,7 +40,8 @@ sherpa-onnx-sys = "=2.0.1"
 # System audio on macOS (src/audio/macos_tap.rs). Same versions and features as cpal's.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "AudioHardwareDeprecated", "objc2", "objc2-foundation"] }
+libc = "0.2"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "AudioHardwareDeprecated", "HostTime", "objc2", "objc2-foundation"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
 objc2-core-foundation = "0.3.1"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSValue"] }

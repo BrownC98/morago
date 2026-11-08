@@ -4,6 +4,8 @@
 use crate::types::{AudioChunk, SAMPLE_RATE, SourceKind};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
+#[cfg(any(target_os = "macos", test))]
+use std::time::Duration;
 
 /// Target chunk length. The resampler may round it to its own block size.
 const CHUNK_MS: usize = 100;
@@ -32,6 +34,62 @@ pub fn downmix_into<T: Copy>(
         data.chunks_exact(channels)
             .map(|frame| frame.iter().map(|&s| conv(s)).sum::<f32>() / channels as f32),
     );
+}
+
+/// One buffer of a Core Audio buffer list: `channels` interleaved channels of f32 frames.
+/// An empty `data` stands for a buffer without data (null pointer).
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy)]
+pub struct TapBuffer<'a> {
+    pub channels: usize,
+    pub data: &'a [f32],
+}
+
+/// Frames that `tap_frames_to_mono` would write for these buffers.
+#[cfg(any(target_os = "macos", test))]
+pub fn tap_frames(buffers: &[TapBuffer]) -> usize {
+    buffers
+        .iter()
+        .filter(|b| b.channels > 0 && b.data.len() >= b.channels)
+        .map(|b| b.data.len() / b.channels)
+        .min()
+        .unwrap_or(0)
+}
+
+/// Mixes the buffers of a Core Audio buffer list to mono and appends the frames to `out`.
+/// The layout comes from the list itself: one buffer with N channels is interleaved, several
+/// buffers are separate channels (non-interleaved). Buffers without data are skipped. The sum is
+/// divided by the number of channels that were used.
+#[cfg(any(target_os = "macos", test))]
+pub fn tap_frames_to_mono(buffers: &[TapBuffer], out: &mut Vec<f32>) {
+    let frames = tap_frames(buffers);
+    if frames == 0 {
+        return;
+    }
+    let used: Vec<&TapBuffer> = buffers
+        .iter()
+        .filter(|b| b.channels > 0 && b.data.len() >= b.channels)
+        .collect();
+    let total_channels: usize = used.iter().map(|b| b.channels).sum();
+    let start = out.len();
+    out.resize(start + frames, 0.0);
+    for b in &used {
+        for (m, frame) in out[start..].iter_mut().zip(b.data.chunks_exact(b.channels)) {
+            *m += frame.iter().sum::<f32>();
+        }
+    }
+    let scale = 1.0 / total_channels as f32;
+    for m in &mut out[start..] {
+        *m *= scale;
+    }
+}
+
+/// Age of a Core Audio host time stamp, both given in nanoseconds. `None` when `then` is later
+/// than `now` or the age exceeds `max`.
+#[cfg(any(target_os = "macos", test))]
+pub fn host_lag(now_ns: u64, then_ns: u64, max: Duration) -> Option<Duration> {
+    let lag = Duration::from_nanos(now_ns.checked_sub(then_ns)?);
+    (lag <= max).then_some(lag)
 }
 
 /// Mono sample rate converter with a fixed output chunk size.
@@ -659,5 +717,82 @@ mod tests {
         for _ in 0..100 {
             assert!(!w.feed(&zeros, 48_000));
         }
+    }
+
+    #[test]
+    fn tap_mix_interleaved_stereo() {
+        let data = [1.0f32, 0.0, 0.5, 0.5, -1.0, 1.0];
+        let mut out = vec![9.0];
+        tap_frames_to_mono(
+            &[TapBuffer {
+                channels: 2,
+                data: &data,
+            }],
+            &mut out,
+        );
+        assert_eq!(out, vec![9.0, 0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn tap_mix_two_mono_buffers() {
+        let left = [1.0f32, 1.0, 1.0];
+        let right = [0.0f32, 0.5, 1.0, 7.0]; // a longer buffer: extra frames are cut
+        let mut out = Vec::new();
+        tap_frames_to_mono(
+            &[
+                TapBuffer {
+                    channels: 1,
+                    data: &left,
+                },
+                TapBuffer {
+                    channels: 1,
+                    data: &right,
+                },
+            ],
+            &mut out,
+        );
+        assert_eq!(out, vec![0.5, 0.75, 1.0]);
+    }
+
+    #[test]
+    fn tap_mix_skips_a_null_buffer_and_divides_by_used_channels() {
+        let left = [0.5f32, 0.5];
+        let mut out = Vec::new();
+        tap_frames_to_mono(
+            &[
+                TapBuffer {
+                    channels: 1,
+                    data: &left,
+                },
+                TapBuffer {
+                    channels: 1,
+                    data: &[],
+                },
+            ],
+            &mut out,
+        );
+        assert_eq!(out, vec![0.5, 0.5]);
+        out.clear();
+        tap_frames_to_mono(
+            &[TapBuffer {
+                channels: 2,
+                data: &[],
+            }],
+            &mut out,
+        );
+        assert!(out.is_empty());
+        tap_frames_to_mono(&[], &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn host_lag_is_the_age() {
+        let max = Duration::from_secs(5);
+        assert_eq!(
+            host_lag(2_000_000_000, 500_000_000, max),
+            Some(Duration::from_millis(1_500))
+        );
+        assert_eq!(host_lag(10, 20, max), None);
+        assert_eq!(host_lag(10_000_000_000, 0, max), None);
     }
 }

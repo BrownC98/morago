@@ -91,6 +91,8 @@ pub fn start(
         tx,
         report: on_error.clone(),
         closing: closing.clone(),
+        // macOS: the tap gives zeros while nothing plays; that is not a permission problem.
+        watch_zeros: !(cfg!(target_os = "macos") && source == SourceKind::System),
     };
     let worker = std::thread::Builder::new()
         .name(format!("audio-worker-{source:?}"))
