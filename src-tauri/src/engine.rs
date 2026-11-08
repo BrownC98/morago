@@ -804,6 +804,18 @@ mod tests {
         chunks
     }
 
+    /// Sends each chunk when its audio would be complete, as a capture does.
+    /// Returns the time of audio 0.
+    fn feed_in_real_time(p: &Pipeline, chunks: &[AudioChunk]) -> Instant {
+        let t0 = Instant::now();
+        for chunk in chunks {
+            let due = t0 + Duration::from_millis(chunk.start_ms + 100);
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            p.audio_tx.send(chunk.clone()).unwrap();
+        }
+        t0
+    }
+
     /// Stops the pipeline and loads the saved session.
     fn finish(
         p: Pipeline,
@@ -833,7 +845,8 @@ mod tests {
     }
 
     /// End to end without audio devices: speech clips go into the pipeline as
-    /// 100 ms chunks of two sources, then the saved session is read back.
+    /// 100 ms chunks of two sources in real time, with partials, then the
+    /// saved session is read back.
     #[test]
     #[ignore]
     fn pipeline_end_to_end() {
@@ -854,9 +867,7 @@ mod tests {
             partial::enabled(&settings.asr),
         )
         .unwrap();
-        for chunk in e2e_chunks() {
-            p.audio_tx.send(chunk).unwrap();
-        }
+        feed_in_real_time(&p, &e2e_chunks());
         let (summary, meta, utterances) = finish(p, root.path(), &store);
         for u in &utterances {
             println!(
@@ -942,8 +953,8 @@ mod tests {
         None
     }
 
-    /// The clips of `pipeline_end_to_end` in real time (one 100 ms chunk per
-    /// source every 100 ms), with partials off, then on. Prints per utterance:
+    /// The clips of `pipeline_end_to_end`, with partials on and off, twice in
+    /// turn (a hot CPU runs slower). Prints per utterance:
     /// first-partial delay from the speech start, partial intervals, final
     /// latency (event time minus segment end, both in audio time) and the
     /// process CPU time per wall time. The `engine::partial` log lines give the
@@ -955,7 +966,7 @@ mod tests {
         let models_dir = models_dir();
         let settings = e2e_settings(&models_dir);
         let chunks = e2e_chunks();
-        for partials in [false, true] {
+        for partials in [true, false, true, false] {
             let root = tempfile::tempdir().unwrap();
             let store = SessionStore::new(root.path());
             let recorder = Arc::new(Recorder::default());
@@ -971,12 +982,7 @@ mod tests {
             )
             .unwrap();
             let cpu = cpu_time();
-            let t0 = Instant::now();
-            for chunk in &chunks {
-                let due = t0 + Duration::from_millis(chunk.start_ms + 100);
-                std::thread::sleep(due.saturating_duration_since(Instant::now()));
-                p.audio_tx.send(chunk.clone()).unwrap();
-            }
+            let t0 = feed_in_real_time(&p, &chunks);
             let (_, _, utterances) = finish(p, root.path(), &store);
             let wall = t0.elapsed();
             let cpu = cpu.zip(cpu_time()).map(|(a, b)| b - a);

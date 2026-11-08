@@ -62,11 +62,29 @@ impl LocalTranslator {
         })
     }
 
+    fn run(
+        &self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        threads: i32,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        let system = system_prompt(source_language, target_language, &History::default());
+        let raw = self.generate(&system, text, threads, stop)?;
+        let translation = clean_output(&raw, text);
+        if translation.is_empty() {
+            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
+        }
+        Ok(translation)
+    }
+
     /// Stops with an error before the next token or prompt part when `stop` returns true.
     fn generate(
         &self,
         system: &str,
         text: &str,
+        threads: i32,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
         let backend = backend()?;
@@ -84,8 +102,8 @@ impl LocalTranslator {
         let params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
             .with_n_batch(n_ctx)
-            .with_n_threads(self.threads)
-            .with_n_threads_batch(self.threads);
+            .with_n_threads(threads)
+            .with_n_threads_batch(threads);
         let mut ctx = self.model.new_context(backend, params)?;
 
         // The prompt goes in parts: `stop` waits for one part, not for all of it.
@@ -134,10 +152,17 @@ impl Translator for LocalTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
-        self.translate_partial(text, source_language, target_language, &|| false)
+        self.run(
+            text,
+            source_language,
+            target_language,
+            self.threads,
+            &|| false,
+        )
     }
 
-    /// The same as `translate`: this provider keeps no history.
+    /// With half the threads: the final ASR of a speech starts while this
+    /// run stops, and needs free cores. This provider keeps no history.
     fn translate_partial(
         &mut self,
         text: &str,
@@ -145,13 +170,8 @@ impl Translator for LocalTranslator {
         target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
-        let system = system_prompt(source_language, target_language, &History::default());
-        let raw = self.generate(&system, text, stop)?;
-        let translation = clean_output(&raw, text);
-        if translation.is_empty() {
-            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
-        }
-        Ok(translation)
+        let threads = (self.threads / 2).max(1);
+        self.run(text, source_language, target_language, threads, stop)
     }
 
     fn label(&self) -> String {
