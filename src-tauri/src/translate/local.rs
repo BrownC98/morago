@@ -38,6 +38,7 @@ pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
     threads: i32,
+    history: History,
 }
 
 impl LocalTranslator {
@@ -61,6 +62,7 @@ impl LocalTranslator {
             model,
             label: format!("로컬 {}", crate::models::display_name(model_id)),
             threads,
+            history: History::default(),
         })
     }
 
@@ -111,6 +113,21 @@ impl LocalTranslator {
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+
+    fn run(
+        &self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        let system = system_prompt(source_language, target_language, &self.history);
+        let translation = clean_output(&self.generate(&system, text, stop)?, text);
+        if translation.is_empty() {
+            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
+        }
+        Ok(translation)
+    }
 }
 
 impl Translator for LocalTranslator {
@@ -120,10 +137,13 @@ impl Translator for LocalTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
-        self.translate_partial(text, source_language, target_language, &|| false)
+        self.history.set_target(target_language);
+        let translation = self.run(text, source_language, target_language, &|| false)?;
+        self.history.push(text);
+        Ok(translation)
     }
 
-    /// The same as `translate`: this provider keeps no history.
+    /// Uses the history as context but does not change it.
     fn translate_partial(
         &mut self,
         text: &str,
@@ -131,13 +151,7 @@ impl Translator for LocalTranslator {
         target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
-        let system = system_prompt(source_language, target_language, &History::default());
-        let raw = self.generate(&system, text, stop)?;
-        let translation = clean_output(&raw, text);
-        if translation.is_empty() {
-            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
-        }
-        Ok(translation)
+        self.run(text, source_language, target_language, stop)
     }
 
     fn label(&self) -> String {
@@ -228,6 +242,33 @@ mod tests {
                 started.elapsed()
             );
             assert!(!out.is_empty());
+        }
+    }
+
+    /// With the earlier lines as context, no translation repeats one of them.
+    #[test]
+    #[ignore = "downloads a 3.3 GB model and runs it on the CPU"]
+    fn local_model_context_does_not_leak() {
+        let dir = ensure_model();
+        let mut t = LocalTranslator::load(&dir, MODEL_ID).unwrap();
+        let lines = [
+            "Let's review the contract with Hanbit before we sign.",
+            "Section four is the part I'm worried about.",
+            "It says they can end the deal with thirty days' notice.",
+            "That's pretty short. Can we ask for ninety?",
+            "We can, but they might push back on the price.",
+            "Then let's offer sixty and see how they respond.",
+        ];
+        let mut earlier: Vec<String> = Vec::new();
+        for line in lines {
+            let out = t.translate(line, Some("en"), "ja").unwrap();
+            println!("{line}\n  => {out}");
+            assert!(!out.contains("Earlier lines"), "{out}");
+            for e in earlier.iter().filter(|e| e.chars().count() >= 8) {
+                assert!(!out.contains(e.as_str()), "{out} repeats {e}");
+            }
+            earlier.push(line.to_string());
+            earlier.push(out);
         }
     }
 }

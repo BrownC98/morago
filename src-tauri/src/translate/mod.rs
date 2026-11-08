@@ -1,13 +1,14 @@
 //! Translation providers. Owner: translate worker.
 //! Contract (do not change signatures without the coordinator).
 //!
-//! Both providers keep the last two source texts of the session and send them
-//! as context (the model translates only the last one), so the trait needs no
-//! extra method for context.
+//! Both providers keep the last source texts of the session in a `History` and
+//! send them as context (the model translates only the last one), so the trait
+//! needs no extra method for context. A translator lives for one session.
 
 mod custom;
 mod local;
 
+pub use custom::{check_extra_body, check_extra_body_map};
 pub(crate) use local::on_gpu as local_on_gpu;
 
 use crate::settings::TranslateConfig;
@@ -54,14 +55,15 @@ pub fn build_translator(
         )?)),
         TranslateConfig::Custom {
             endpoint,
-            reasoning_effort,
+            extra_body,
             ..
         } => {
+            custom::required_model(extra_body)?;
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
             Ok(Box::new(custom::CustomTranslator::new(
-                endpoint.clone(),
+                &endpoint.base_url,
                 key,
-                *reasoning_effort,
+                extra_body.clone(),
             )?))
         }
     }
@@ -105,19 +107,35 @@ pub(crate) fn language_name(code: &str) -> String {
     name.to_string()
 }
 
-/// Number of earlier utterances sent as context.
-const CONTEXT_LINES: usize = 2;
+/// Most earlier utterances sent as context.
+const CONTEXT_LINES: usize = 4;
+/// Most characters of all context lines: a long utterance must not make each
+/// prompt slow on the CPU.
+const CONTEXT_CHARS: usize = 600;
 
-/// The last source texts of the session.
+/// The last source texts of the session, for one target language.
 #[derive(Default)]
-pub(crate) struct History(VecDeque<String>);
+pub(crate) struct History {
+    target: String,
+    lines: VecDeque<String>,
+}
 
 impl History {
-    pub(crate) fn push(&mut self, text: &str) {
-        if self.0.len() == CONTEXT_LINES {
-            self.0.pop_front();
+    /// Clears the lines when the target language changes, as a new session does.
+    pub(crate) fn set_target(&mut self, target_language: &str) {
+        if !self.target.eq_ignore_ascii_case(target_language) {
+            self.target = target_language.to_string();
+            self.lines.clear();
         }
-        self.0.push_back(text.to_string());
+    }
+
+    pub(crate) fn push(&mut self, text: &str) {
+        self.lines.push_back(text.replace('\n', " "));
+        while self.lines.len() > CONTEXT_LINES
+            || self.lines.iter().map(|l| l.chars().count()).sum::<usize>() > CONTEXT_CHARS
+        {
+            self.lines.pop_front();
+        }
     }
 }
 
@@ -140,13 +158,13 @@ pub(crate) fn system_prompt(
     prompt.push_str(
         " Output only the translation: no notes, no explanation, no quotation marks. Keep names, numbers and technical terms.",
     );
-    if !history.0.is_empty() {
+    if !history.lines.is_empty() {
         prompt.push_str(
             "\nEarlier lines of the same meeting, only as context. Do not translate or repeat them:",
         );
-        for line in &history.0 {
+        for line in &history.lines {
             prompt.push_str("\n- ");
-            prompt.push_str(&line.replace('\n', " "));
+            prompt.push_str(line);
         }
     }
     prompt
@@ -159,8 +177,12 @@ pub(crate) fn clean_output(raw: &str, source_text: &str) -> String {
     if let Some(end) = s.rfind("</think>") {
         s = s[end + "</think>".len()..].trim();
     }
-    // Gemma 4 12B writes an empty thought block before the answer; with
-    // control tokens hidden it shows as a leading "thought" line.
+    // Gemma 4 12B writes an empty thought block before the answer. Its gguf
+    // does not mark the channel tokens as control tokens, so they come as text;
+    // with control tokens hidden it shows as a leading "thought" line.
+    if let Some(end) = s.rfind("<channel|>") {
+        s = s[end + "<channel|>".len()..].trim();
+    }
     if let Some(rest) = s.strip_prefix("thought\n") {
         s = rest.trim();
     }
@@ -214,6 +236,30 @@ pub(crate) fn clean_output(raw: &str, source_text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// `start_session` and `test_provider` build the translator here.
+    #[test]
+    fn a_custom_server_without_model_is_a_korean_error() {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"model": " "}),
+            serde_json::json!({"model": 3}),
+        ] {
+            let config = TranslateConfig::Custom {
+                endpoint: crate::types::Endpoint {
+                    base_url: "http://localhost:8000/v1".into(),
+                    model: String::new(),
+                },
+                extra_body: extra.as_object().unwrap().clone(),
+                partial_interval_ms: None,
+            };
+            let err = build_translator(&config, Path::new("")).err().unwrap();
+            assert_eq!(
+                err.to_string(),
+                "번역 모델 이름이 없습니다. 설정 › 번역 › 추가 요청 값에 \"model\"을 적으세요."
+            );
+        }
+    }
+
     #[test]
     fn same_language_is_skipped() {
         assert!(!needs_translation(Some("ko"), "KO"));
@@ -251,13 +297,38 @@ mod tests {
         let p = system_prompt(Some("en"), "ko", &history);
         assert!(p.contains("from English into Korean"));
         assert!(!p.contains("Earlier lines"));
-        history.push("one");
-        history.push("two");
-        history.push("three");
+        for line in ["one", "two", "three", "four", "five\nsix"] {
+            history.push(line);
+        }
         let p = system_prompt(None, "ja", &history);
         assert!(p.contains("into Japanese"));
-        assert!(p.contains("- two\n- three"));
+        assert!(p.ends_with("- two\n- three\n- four\n- five six"), "{p}");
         assert!(!p.contains("- one"));
+    }
+
+    #[test]
+    fn history_keeps_the_newest_lines_within_the_char_cap() {
+        let mut history = History::default();
+        history.push("old");
+        history.push(&"가".repeat(CONTEXT_CHARS - 10));
+        history.push("0123456789");
+        assert_eq!(history.lines.len(), 2);
+        history.push("x");
+        assert_eq!(history.lines, ["0123456789", "x"]);
+        // A line longer than the cap is not sent.
+        history.push(&"a".repeat(CONTEXT_CHARS + 1));
+        assert!(history.lines.is_empty());
+    }
+
+    #[test]
+    fn history_clears_when_the_target_changes() {
+        let mut history = History::default();
+        history.set_target("ko");
+        history.push("one");
+        history.set_target("KO");
+        assert_eq!(history.lines, ["one"]);
+        history.set_target("ja");
+        assert!(history.lines.is_empty());
     }
 
     #[test]
@@ -272,6 +343,11 @@ mod tests {
             clean_output("<think>x</think>\nこんにちは", "hello"),
             "こんにちは"
         );
+        assert_eq!(
+            clean_output("<|channel>thought\n<channel|>네, 오늘 하겠습니다.", "x"),
+            "네, 오늘 하겠습니다."
+        );
+        assert_eq!(clean_output("thought\n안녕", "x"), "안녕");
         assert_eq!(clean_output("plain", "plain"), "plain");
         // Inner quotes stay.
         assert_eq!(clean_output("\"a\" and \"b\"", "x"), "\"a\" and \"b\"");

@@ -439,9 +439,12 @@ mod tests {
         TranslateConfig::Custom {
             endpoint: crate::types::Endpoint {
                 base_url: "http://x/v1".into(),
-                model: "m".into(),
+                model: String::new(),
             },
-            reasoning_effort: None,
+            extra_body: serde_json::json!({"model": "m"})
+                .as_object()
+                .unwrap()
+                .clone(),
             partial_interval_ms,
         }
     }
