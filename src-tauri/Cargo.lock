@@ -2587,6 +2587,7 @@ dependencies = [
  "crossbeam-channel",
  "env_logger",
  "hound",
+ "libc",
  "log",
  "objc2",
  "objc2-core-audio",
