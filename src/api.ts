@@ -50,13 +50,14 @@ export interface Endpoint {
   model: string;
 }
 
-/** Value of `reasoning_effort` for a custom translation server. Absent = default (not sent). */
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
-
-/** `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has `reasoning_effort`. */
+/**
+ * `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has
+ * `extra_body` (absent = `{}`): its `model` is the translation model, and the
+ * translate `endpoint.model` is always "".
+ */
 export type ProviderConfig =
   | { kind: "local"; model_id: string }
-  | { kind: "custom"; endpoint: Endpoint; reasoning_effort?: ReasoningEffort };
+  | { kind: "custom"; endpoint: Endpoint; extra_body?: Record<string, unknown> };
 
 export type ThemeSetting = "light" | "dark" | "system";
 
@@ -158,6 +159,8 @@ export async function pickSavePath(
 export const api = {
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<void>("save_settings", { settings }),
+  /** Rejects with the Korean reason when `save_settings` would refuse the text as `extra_body`. */
+  checkExtraBody: (text: string) => call<void>("check_extra_body", { text }),
   /** The key goes to the core and is not kept in the UI. */
   setApiKey: (role: KeyRole, baseUrl: string, key: string) =>
     call<void>("set_api_key", { role, baseUrl, key }),

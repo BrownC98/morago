@@ -6,7 +6,6 @@ import {
   type KeyRole,
   type ModelInfo,
   type ProviderConfig,
-  type ReasoningEffort,
   type ThemeSetting,
 } from "./api";
 import { bytes, languageName, TARGET_LANGUAGES } from "./format";
@@ -208,27 +207,95 @@ function KeyField({ role, baseUrl }: { role: KeyRole; baseUrl: string }) {
   );
 }
 
-const EFFORTS: { value: ReasoningEffort | ""; label: string }[] = [
-  { value: "", label: "기본값(보내지 않음)" },
-  { value: "none", label: "none" },
-  { value: "minimal", label: "minimal" },
-  { value: "low", label: "low" },
-  { value: "medium", label: "medium" },
-  { value: "high", label: "high" },
-];
+type ExtraBody = Record<string, unknown>;
 
+/** Text of a saved `extra_body`: blank for an empty object. */
+const extraBodyText = (body?: ExtraBody) => (body && Object.keys(body).length > 0 ? JSON.stringify(body, null, 2) : "");
+
+/** `extra_body` of a custom translation server as JSON text. The core checks it, live and on save. */
+function ExtraBodyField({
+  initial,
+  saved,
+  onText,
+  onCommit,
+}: {
+  initial: string;
+  saved?: ExtraBody;
+  onText: (text: string) => void;
+  onCommit: (body: ExtraBody) => void;
+}) {
+  const [text, setText] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  // Only the newest check sets `error`.
+  const checkId = useRef(0);
+
+  useEffect(() => {
+    const n = ++checkId.current;
+    const t = window.setTimeout(() => {
+      api.checkExtraBody(text).then(
+        () => n === checkId.current && setError(null),
+        (e) => n === checkId.current && setError(errText(e)),
+      );
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [text]);
+
+  const commit = async () => {
+    const n = ++checkId.current;
+    try {
+      await api.checkExtraBody(text);
+    } catch (e) {
+      if (n === checkId.current) setError(errText(e));
+      return;
+    }
+    if (n !== checkId.current) return;
+    setError(null);
+    const body = (text.trim() ? JSON.parse(text) : {}) as ExtraBody;
+    if (JSON.stringify(body) !== JSON.stringify(saved ?? {})) onCommit(body);
+  };
+
+  return (
+    <>
+      <label htmlFor="translate-extra" className="top-lab">
+        추가 요청 값
+      </label>
+      <div className="stack">
+        <textarea
+          id="translate-extra"
+          className="inp mono"
+          value={text}
+          rows={5}
+          placeholder={'{\n  "model": "gpt-5-mini",\n  "reasoning_effort": "low"\n}'}
+          spellCheck={false}
+          autoComplete="off"
+          translate="no"
+          aria-invalid={error !== null}
+          aria-describedby="translate-extra-msg"
+          onChange={(e) => {
+            setText(e.target.value);
+            onText(e.target.value);
+          }}
+          onBlur={() => void commit()}
+        />
+        <p id="translate-extra-msg" className={error ? "fhint errtext" : "fhint"} role="status">
+          {error ?? 'JSON 객체로 적습니다. "model"이 번역 모델입니다. 번역 요청마다 합쳐 보냅니다.'}
+        </p>
+      </div>
+    </>
+  );
+}
+
+/** Address, key and test of a custom service. ASR has a 모델 row; `children` go after it. */
 function EndpointForm({
   role,
   endpoint,
-  effort,
   onCommit,
-  onEffort,
+  children,
 }: {
   role: KeyRole;
   endpoint: Endpoint;
-  effort?: ReasoningEffort;
   onCommit: (e: Endpoint) => void;
-  onEffort: (e: ReasoningEffort | undefined) => void;
+  children?: React.ReactNode;
 }) {
   const [url, setUrl] = useState(endpoint.base_url);
   const [model, setModel] = useState(endpoint.model);
@@ -280,31 +347,24 @@ function EndpointForm({
           연결 시험
         </button>
       </div>
-      <label htmlFor={`${id}-model`}>모델</label>
-      <input
-        id={`${id}-model`}
-        className="inp mono"
-        value={model}
-        placeholder={role === "asr" ? "whisper-1" : "gpt-4o-mini"}
-        spellCheck={false}
-        autoComplete="off"
-        translate="no"
-        onChange={(e) => setModel(e.target.value)}
-        onBlur={commit}
-        onKeyDown={enter}
-      />
-      {role === "translate" && (
+      {role === "asr" && (
         <>
-          <span className="flab" aria-hidden="true">추론 강도</span>
-          <Select
-            label="추론 강도"
-            width={260}
-            value={effort ?? ""}
-            onChange={(v) => onEffort(v === "" ? undefined : (v as ReasoningEffort))}
-            options={EFFORTS}
+          <label htmlFor={`${id}-model`}>모델</label>
+          <input
+            id={`${id}-model`}
+            className="inp mono"
+            value={model}
+            placeholder="whisper-1"
+            spellCheck={false}
+            autoComplete="off"
+            translate="no"
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={commit}
+            onKeyDown={enter}
           />
         </>
       )}
+      {children}
       <span />
       <p className={test && test !== "busy" && !test.ok ? "fhint errtext" : "fhint"} role="status">
         {test === "busy" ? "연결을 시험하는 중…" : test ? `${test.ok ? "연결됨. " : "연결 실패. "}${test.message}` : ""}
@@ -320,18 +380,22 @@ function ProviderCard({ role }: { role: KeyRole }) {
   const list = models.filter((m) => m.kind === wantKind);
   // Remember the other variant, so a switch back does not lose what the user typed.
   const lastEndpoint = useRef<Endpoint>({ base_url: "", model: "" });
-  const lastEffort = useRef<ReasoningEffort | undefined>(undefined);
+  const lastExtra = useRef<ExtraBody | undefined>(undefined);
+  // The typed text, also when it is not valid and so not saved.
+  const extraText = useRef<string | null>(null);
   const lastLocal = useRef<string | null>(null);
   if (cfg?.kind === "custom") {
     lastEndpoint.current = cfg.endpoint;
-    lastEffort.current = cfg.reasoning_effort;
+    lastExtra.current = cfg.extra_body;
   }
   if (cfg?.kind === "local") lastLocal.current = cfg.model_id;
   if (!cfg) return null;
   const set = (c: ProviderConfig) => updateSettings(role === "asr" ? { asr: c } : { translate: c });
-  // The default is the absent key, as in the settings file.
-  const custom = (endpoint: Endpoint, effort?: ReasoningEffort): ProviderConfig =>
-    role === "translate" && effort ? { kind: "custom", endpoint, reasoning_effort: effort } : { kind: "custom", endpoint };
+  // An empty `extra_body` is the absent key, as in the settings file.
+  const custom = (endpoint: Endpoint, extra?: ExtraBody): ProviderConfig =>
+    role === "translate" && extra && Object.keys(extra).length > 0
+      ? { kind: "custom", endpoint, extra_body: extra }
+      : { kind: "custom", endpoint };
 
   return (
     <div className="card">
@@ -339,7 +403,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom") set(custom(lastEndpoint.current, lastEffort.current));
+          if (k === "custom") set(custom(lastEndpoint.current, lastExtra.current));
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
@@ -361,13 +425,16 @@ function ProviderCard({ role }: { role: KeyRole }) {
         </div>
       ) : (
         <>
-          <EndpointForm
-            role={role}
-            endpoint={cfg.endpoint}
-            effort={cfg.reasoning_effort}
-            onCommit={(endpoint) => set(custom(endpoint, cfg.reasoning_effort))}
-            onEffort={(effort) => set(custom(cfg.endpoint, effort))}
-          />
+          <EndpointForm role={role} endpoint={cfg.endpoint} onCommit={(endpoint) => set(custom(endpoint, cfg.extra_body))}>
+            {role === "translate" && (
+              <ExtraBodyField
+                initial={extraText.current ?? extraBodyText(cfg.extra_body)}
+                saved={cfg.extra_body}
+                onText={(t) => (extraText.current = t)}
+                onCommit={(body) => set(custom(cfg.endpoint, body))}
+              />
+            )}
+          </EndpointForm>
           <span className="fhint">
             OpenAI 호환 주소를 씁니다(Ollama, LM Studio, vLLM도 가능). API 키는 Windows 자격 증명 관리자, macOS 키체인에만
             저장하고 설정 파일, 기록, 내보낸 파일에는 넣지 않습니다.

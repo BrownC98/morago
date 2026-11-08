@@ -23,9 +23,10 @@ pub enum TranslateConfig {
     Local { model_id: String },
     /// OpenAI-compatible `POST {base_url}/chat/completions`.
     Custom {
+        /// `model` is always "": the model is `extra_body.model`.
         endpoint: Endpoint,
-        /// Merged into each request under the app keys. Passes
-        /// `translate::check_extra_body_map`: no API key, no app key.
+        /// Merged into each request; the app sets `messages` and `stream`.
+        /// Passes `translate::check_extra_body_map`.
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         extra_body: Map<String, Value>,
     },
@@ -42,7 +43,7 @@ enum RawTranslateConfig {
         endpoint: Endpoint,
         #[serde(default)]
         extra_body: Map<String, Value>,
-        /// Old field; read only, moved into `extra_body`.
+        /// Old field; read only, moved into `extra_body` like `endpoint.model`.
         #[serde(default)]
         reasoning_effort: Option<String>,
     },
@@ -53,7 +54,7 @@ impl From<RawTranslateConfig> for TranslateConfig {
         match raw {
             RawTranslateConfig::Local { model_id } => Self::Local { model_id },
             RawTranslateConfig::Custom {
-                endpoint,
+                mut endpoint,
                 mut extra_body,
                 reasoning_effort,
             } => {
@@ -61,6 +62,10 @@ impl From<RawTranslateConfig> for TranslateConfig {
                     extra_body
                         .entry("reasoning_effort")
                         .or_insert(Value::String(effort));
+                }
+                let model = std::mem::take(&mut endpoint.model);
+                if !model.is_empty() {
+                    extra_body.entry("model").or_insert(Value::String(model));
                 }
                 Self::Custom {
                     endpoint,
@@ -237,7 +242,7 @@ mod tests {
             translate: TranslateConfig::Custom {
                 endpoint: Endpoint {
                     base_url: "http://localhost:8000/v1".into(),
-                    model: "gpt-test".into(),
+                    model: String::new(),
                 },
                 extra_body: extra_body.as_object().unwrap().clone(),
             },
@@ -245,50 +250,66 @@ mod tests {
         }
     }
 
-    fn custom_file(fields: &str) -> String {
+    /// A settings file with a custom translation server; `model` is `endpoint.model`.
+    fn custom_file(model: &str, fields: &str) -> String {
         format!(
-            r#"{{"translate":{{"kind":"custom","endpoint":{{"base_url":"http://localhost:8000/v1","model":"gpt-test"}}{fields}}}}}"#
+            r#"{{"translate":{{"kind":"custom","endpoint":{{"base_url":"http://localhost:8000/v1","model":"{model}"}}{fields}}}}}"#
         )
+    }
+
+    /// Loads `file`, saves it again and returns the settings and the saved `translate`.
+    fn load_and_save(file: &str) -> (Settings, Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, file).unwrap();
+        let s = load(&path).unwrap();
+        save(&path, &s).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        (s, saved["translate"].clone())
+    }
+
+    fn saved_custom(extra_body: Value) -> Value {
+        serde_json::json!({
+            "kind": "custom",
+            "endpoint": {"base_url": "http://localhost:8000/v1", "model": ""},
+            "extra_body": extra_body,
+        })
+    }
+
+    #[test]
+    fn an_old_model_moves_into_extra_body() {
+        let (s, saved) = load_and_save(&custom_file("gpt-test", ""));
+        let extra = serde_json::json!({"model": "gpt-test"});
+        assert_eq!(s, translate_custom(extra.clone()));
+        assert_eq!(saved, saved_custom(extra));
     }
 
     #[test]
     fn an_old_reasoning_effort_moves_into_extra_body() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
         for effort in ["none", "minimal", "low", "medium", "high"] {
-            std::fs::write(
-                &path,
-                custom_file(&format!(r#","reasoning_effort":"{effort}""#)),
-            )
-            .unwrap();
-            let s = load(&path).unwrap();
-            assert_eq!(
-                s,
-                translate_custom(serde_json::json!({"reasoning_effort": effort}))
-            );
-            save(&path, &s).unwrap();
-            let file: Value =
-                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(
-                file["translate"],
-                serde_json::json!({
-                    "kind": "custom",
-                    "endpoint": {"base_url": "http://localhost:8000/v1", "model": "gpt-test"},
-                    "extra_body": {"reasoning_effort": effort},
-                })
-            );
+            let (s, saved) = load_and_save(&custom_file(
+                "gpt-test",
+                &format!(r#","reasoning_effort":"{effort}""#),
+            ));
+            let extra = serde_json::json!({"model": "gpt-test", "reasoning_effort": effort});
+            assert_eq!(s, translate_custom(extra.clone()));
+            assert_eq!(saved, saved_custom(extra));
         }
     }
 
     #[test]
-    fn a_file_without_extra_body_loads_with_an_empty_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, custom_file("")).unwrap();
-        assert_eq!(
-            load(&path).unwrap(),
-            translate_custom(serde_json::json!({}))
-        );
+    fn a_model_in_extra_body_wins_over_the_old_field() {
+        let (s, saved) = load_and_save(&custom_file("old", r#","extra_body":{"model":"new"}"#));
+        let extra = serde_json::json!({"model": "new"});
+        assert_eq!(s, translate_custom(extra.clone()));
+        assert_eq!(saved, saved_custom(extra));
+    }
+
+    #[test]
+    fn a_file_without_model_and_extra_body_loads_with_an_empty_one() {
+        let (s, saved) = load_and_save(&custom_file("", ""));
+        assert_eq!(s, translate_custom(serde_json::json!({})));
+        assert!(saved.get("extra_body").is_none(), "{saved}");
     }
 
     #[test]
@@ -296,6 +317,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         let s = translate_custom(serde_json::json!({
+            "model": "gpt-test",
             "reasoning_effort": "low",
             "temperature": 0.2,
             "chat_template_kwargs": {"enable_thinking": false},
@@ -314,7 +336,10 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(
             &path,
-            custom_file(r#","extra_body":{"top_p":0.9,"x":{"Api-Key":"LEAK1234"}}"#),
+            custom_file(
+                "",
+                r#","extra_body":{"top_p":0.9,"x":{"Api-Key":"LEAK1234"}}"#,
+            ),
         )
         .unwrap();
         let s = load(&path).unwrap();

@@ -2,7 +2,6 @@
 
 use super::{History, Translator, clean_output, system_prompt};
 use crate::secrets::Secret;
-use crate::types::Endpoint;
 use anyhow::{Context, anyhow};
 use serde_json::{Map, Value, json};
 use std::time::Duration;
@@ -44,13 +43,25 @@ pub fn check_extra_body_map(map: &Map<String, Value>) -> Result<(), String> {
     if has_credential(map) {
         return Err("API 키는 이 칸에 적지 않습니다. 위의 API 키 칸을 쓰세요".into());
     }
-    if map.contains_key("model") {
-        return Err("\"model\"은 [모델] 칸에 적으세요".into());
+    if map.get("model").is_some_and(|m| model_name(m).is_none()) {
+        return Err("\"model\"에는 모델 이름을 문자열로 적으세요".into());
     }
     if map.contains_key("messages") || map.contains_key("stream") {
         return Err("\"messages\"와 \"stream\"은 앱이 정합니다".into());
     }
     Ok(())
+}
+
+/// A non-empty string `model` value.
+fn model_name(value: &Value) -> Option<&str> {
+    value.as_str().map(str::trim).filter(|m| !m.is_empty())
+}
+
+/// The model of the `extra_body` setting; an error for the user if there is none.
+pub(crate) fn required_model(extra_body: &Map<String, Value>) -> anyhow::Result<&str> {
+    extra_body.get("model").and_then(model_name).ok_or_else(|| {
+        anyhow!("번역 모델 이름이 없습니다. 설정 › 번역 › 추가 요청 값에 \"model\"을 적으세요.")
+    })
 }
 
 fn has_credential(map: &Map<String, Value>) -> bool {
@@ -76,12 +87,13 @@ fn value_has_credential(value: &Value) -> bool {
 }
 
 pub(crate) struct CustomTranslator {
-    endpoint: Endpoint,
+    /// `extra_body.model`. Required, so a 400 never drops it.
+    model: String,
     url: String,
     key: Option<Secret>,
     client: reqwest::blocking::Client,
     history: History,
-    /// The `extra_body` setting, merged into each request.
+    /// The `extra_body` setting without `model`, merged into each request.
     extra_body: Map<String, Value>,
     /// Top-level keys that the server refused. Left out of each request
     /// for the life of this translator.
@@ -92,21 +104,20 @@ pub(crate) struct CustomTranslator {
 
 impl CustomTranslator {
     pub(crate) fn new(
-        endpoint: Endpoint,
+        base_url: &str,
         key: Option<Secret>,
-        extra_body: Map<String, Value>,
+        mut extra_body: Map<String, Value>,
     ) -> anyhow::Result<Self> {
+        let model = required_model(&extra_body)?.to_string();
+        extra_body.remove("model");
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60))
             .build()
             .context("HTTP 클라이언트를 만들지 못했습니다")?;
-        let url = format!(
-            "{}/chat/completions",
-            endpoint.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         Ok(Self {
-            endpoint,
+            model,
             url,
             key,
             client,
@@ -119,7 +130,7 @@ impl CustomTranslator {
 
     fn request_body(&self, text: &str, source: Option<&str>, target: &str) -> Value {
         let mut body = self.optional_params();
-        body.insert("model".into(), json!(self.endpoint.model));
+        body.insert("model".into(), json!(self.model));
         body.insert("stream".into(), json!(false));
         body.insert(
             "messages".into(),
@@ -301,7 +312,7 @@ impl Translator for CustomTranslator {
     }
 
     fn label(&self) -> String {
-        format!("사용자 지정: {}", self.endpoint.model)
+        format!("사용자 지정: {}", self.model)
     }
 
     fn take_notice(&mut self) -> Option<String> {
@@ -381,13 +392,11 @@ mod tests {
         translator_with(base_url, key, json!({}))
     }
 
+    /// A translator for model "gpt-test" plus `extra_body`.
     fn translator_with(base_url: String, key: Option<&str>, extra_body: Value) -> CustomTranslator {
-        let endpoint = Endpoint {
-            base_url,
-            model: "gpt-test".into(),
-        };
-        let extra_body = extra_body.as_object().unwrap().clone();
-        CustomTranslator::new(endpoint, key.map(|k| Secret::new(k.into())), extra_body).unwrap()
+        let mut extra = json!({"model": "gpt-test"}).as_object().unwrap().clone();
+        extra.extend(extra_body.as_object().unwrap().clone());
+        CustomTranslator::new(&base_url, key.map(|k| Secret::new(k.into())), extra).unwrap()
     }
 
     fn notice_for(key: &str) -> String {
@@ -574,21 +583,37 @@ mod tests {
                 "reasoning_effort": "none",
                 "chat_template_kwargs": {"enable_thinking": false},
                 "max_tokens": 200,
+                "model": " gpt-5-mini ",
             }),
         );
+        assert_eq!(t.label(), "사용자 지정: gpt-5-mini");
         // `check_extra_body` refuses app keys; the body must not let them through anyway.
-        t.extra_body.insert("model".into(), json!("other"));
         t.extra_body.insert("stream".into(), json!(true));
+        t.extra_body.insert("messages".into(), json!([]));
         t.translate("one", Some("en"), "ko").unwrap();
         let body = request_json(&server.join().unwrap());
         assert_eq!(body["reasoning_effort"], "none", "{body}");
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
         assert_eq!(body["max_tokens"], 200);
         assert_eq!(body["temperature"], 0.2);
-        assert_eq!(body["model"], "gpt-test");
+        assert_eq!(body["model"], "gpt-5-mini");
         assert_eq!(body["stream"], false);
         assert_eq!(body["messages"][1]["content"], "one");
         assert_eq!(t.take_notice(), None);
+    }
+
+    #[test]
+    fn a_400_that_names_the_model_does_not_drop_it() {
+        let refusal = json!({"error": {"message": "x", "param": "model"}}).to_string();
+        let (base_url, server) = mock_server("400 Bad Request", &refusal);
+        let mut t = translator(base_url, None);
+        let err = t
+            .translate("one", Some("en"), "ko")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("400"), "{err}");
+        assert_eq!(request_json(&server.join().unwrap())["model"], "gpt-test");
+        assert!(t.refused.is_empty());
     }
 
     #[test]
@@ -815,10 +840,13 @@ mod tests {
                 "{ }로 감싼 JSON 객체를 적으세요"
             );
         }
-        assert_eq!(
-            check_extra_body(r#"{"model": "x"}"#).unwrap_err(),
-            "\"model\"은 [모델] 칸에 적으세요"
-        );
+        assert_eq!(check_extra_body(r#"{"model": "x"}"#).unwrap()["model"], "x");
+        for text in [r#"{"model": ""}"#, r#"{"model": 1}"#, r#"{"model": null}"#] {
+            assert_eq!(
+                check_extra_body(text).unwrap_err(),
+                "\"model\"에는 모델 이름을 문자열로 적으세요"
+            );
+        }
         for text in [r#"{"messages": []}"#, r#"{"stream": true}"#] {
             assert_eq!(
                 check_extra_body(text).unwrap_err(),
@@ -844,8 +872,8 @@ mod tests {
             r#"{"a": "sk-proj-123"}"#,
             r#"{"a": ["Bearer abc"]}"#,
             r#"{"a": {"b": " bearer abc"}}"#,
-            // A key is refused before the app key rule.
-            r#"{"model": "m", "api_key": "x"}"#,
+            // A key is refused before the other rules.
+            r#"{"model": 1, "api_key": "x"}"#,
         ] {
             assert_eq!(check_extra_body(text).unwrap_err(), refused, "{text}");
         }

@@ -46,9 +46,10 @@ pub fn build_translator(
             endpoint,
             extra_body,
         } => {
+            custom::required_model(extra_body)?;
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
             Ok(Box::new(custom::CustomTranslator::new(
-                endpoint.clone(),
+                &endpoint.base_url,
                 key,
                 extra_body.clone(),
             )?))
@@ -222,6 +223,29 @@ pub(crate) fn clean_output(raw: &str, source_text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `start_session` and `test_provider` build the translator here.
+    #[test]
+    fn a_custom_server_without_model_is_a_korean_error() {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"model": " "}),
+            serde_json::json!({"model": 3}),
+        ] {
+            let config = TranslateConfig::Custom {
+                endpoint: crate::types::Endpoint {
+                    base_url: "http://localhost:8000/v1".into(),
+                    model: String::new(),
+                },
+                extra_body: extra.as_object().unwrap().clone(),
+            };
+            let err = build_translator(&config, Path::new("")).err().unwrap();
+            assert_eq!(
+                err.to_string(),
+                "번역 모델 이름이 없습니다. 설정 › 번역 › 추가 요청 값에 \"model\"을 적으세요."
+            );
+        }
+    }
 
     #[test]
     fn same_language_is_skipped() {
