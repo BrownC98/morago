@@ -34,6 +34,8 @@ tauri-plugin-dialog = "2"
 keyring-core = "1.0.1"
 zeroize = "1.9.1"
 tempfile = "3.27.0"
+sherpa-onnx = "2.0.1"
+sherpa-onnx-sys = "=2.0.1"
 
 # OS credential stores for API keys (secrets.rs). Linux is for development only.
 [target.'cfg(target_os = "windows")'.dependencies]

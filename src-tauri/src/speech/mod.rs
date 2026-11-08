@@ -1,9 +1,22 @@
 //! Speech pipeline parts: VAD, speech recognition (ASR) and speaker diarization.
 //! Owner: speech worker. Contract (do not change signatures without the coordinator).
 
+mod custom;
+mod diarize;
+mod local;
+mod vad;
+mod wav;
+
+use crate::secrets::{self, Role};
 use crate::settings::AsrConfig;
-use crate::types::{AudioChunk, SpeechSegment, Transcript};
+use crate::types::{SpeechSegment, Transcript};
 use std::path::Path;
+
+// Used by the engine once it is wired.
+#[allow(unused_imports)]
+pub use diarize::Diarizer;
+#[allow(unused_imports)]
+pub use vad::Vad;
 
 /// Speech recognition for one segment. Runs on a worker thread (blocking).
 pub trait Asr: Send {
@@ -15,45 +28,164 @@ pub trait Asr: Send {
 /// Builds the ASR from settings. Local models are in `models_dir`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
 pub fn build_asr(config: &AsrConfig, models_dir: &Path) -> anyhow::Result<Box<dyn Asr>> {
-    let _ = (config, models_dir);
-    anyhow::bail!("ASR is not implemented yet")
-}
-
-/// Voice activity detection for one source. Use one value per source.
-pub struct Vad {
-    _private: (),
-}
-
-impl Vad {
-    pub fn new(models_dir: &Path) -> anyhow::Result<Self> {
-        let _ = models_dir;
-        anyhow::bail!("VAD is not implemented yet")
-    }
-    /// Adds audio; returns the segments that ended.
-    pub fn push(&mut self, chunk: &AudioChunk) -> Vec<SpeechSegment> {
-        let _ = chunk;
-        Vec::new()
-    }
-    /// Ends the stream; returns the open segment, if any.
-    pub fn flush(&mut self) -> Vec<SpeechSegment> {
-        Vec::new()
+    match config {
+        AsrConfig::Local { model_id } => {
+            Ok(Box::new(local::LocalWhisper::new(models_dir, model_id)?))
+        }
+        AsrConfig::Custom { endpoint } => {
+            let key = secrets::get_key(Role::Asr, &endpoint.base_url)?;
+            Ok(Box::new(custom::CustomAsr::new(endpoint, key)?))
+        }
     }
 }
 
-/// Online speaker diarization over one session (all sources share one value,
-/// so the same voice on mic and system gets one id).
-pub struct Diarizer {
-    _private: (),
-}
+#[cfg(test)]
+mod tests {
+    //! `real_models_pipeline` is `#[ignore]`: it downloads models and needs wav files.
+    //! Run: `MORAGO_TEST_WAVS=<dir> cargo test real_models_pipeline -- --ignored --nocapture`
+    //! Optional: `MORAGO_TEST_MODELS=<dir>` (model cache), `MORAGO_TEST_ASR=<id>` (default whisper-base).
+    //! Wav files in `<dir>` (16 kHz mono): en0, en1, sv_ko, sv_ja, sv_zh, sv_en, sv_yue.
+    use super::*;
+    use crate::models;
+    use crate::types::{AudioChunk, SAMPLE_RATE, SourceKind};
+    use std::collections::BTreeSet;
+    use std::sync::atomic::AtomicBool;
 
-impl Diarizer {
-    pub fn new(models_dir: &Path) -> anyhow::Result<Self> {
-        let _ = models_dir;
-        anyhow::bail!("diarization is not implemented yet")
+    fn read_wav(dir: &Path, name: &str) -> Vec<f32> {
+        let path = dir.join(format!("{name}.wav"));
+        sherpa_onnx::Wave::read(path.to_str().unwrap())
+            .unwrap_or_else(|| panic!("cannot read {}", path.display()))
+            .samples()
+            .to_vec()
     }
-    /// Returns the speaker id ("S1", "S2", ...) for the segment.
-    pub fn assign(&mut self, segment: &SpeechSegment) -> anyhow::Result<String> {
-        let _ = segment;
-        Ok("S1".into())
+
+    fn ensure_model(models_dir: &Path, id: &str) {
+        if models::is_installed(models_dir, id) {
+            return;
+        }
+        let last = std::sync::Mutex::new(0u64);
+        models::download(
+            models_dir,
+            id,
+            &|p| {
+                let pct = p.done_bytes * 100 / p.total_bytes.unwrap_or(1).max(1);
+                let mut l = last.lock().unwrap();
+                if pct / 10 != *l / 10 {
+                    println!("download {id}: {pct}%");
+                }
+                *l = pct;
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    }
+
+    /// Runs VAD over `samples` (100 ms chunks) and returns the segments.
+    fn segments(vad: &mut Vad, samples: &[f32]) -> Vec<SpeechSegment> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for chunk in samples.chunks(1600) {
+            out.extend(vad.push(&AudioChunk {
+                source: SourceKind::System,
+                start_ms: start as u64 * 1000 / SAMPLE_RATE as u64,
+                samples: chunk.to_vec(),
+            }));
+            start += chunk.len();
+        }
+        out.extend(vad.flush());
+        out
+    }
+
+    #[test]
+    #[ignore = "downloads models and needs wav files (MORAGO_TEST_WAVS)"]
+    fn real_models_pipeline() {
+        let wavs = std::path::PathBuf::from(
+            std::env::var("MORAGO_TEST_WAVS").expect("set MORAGO_TEST_WAVS to the wav folder"),
+        );
+        let models_dir = std::env::var("MORAGO_TEST_MODELS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir().join("morago-test-models"));
+        let asr_id = std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| "whisper-base".into());
+        for id in [
+            models::VAD_MODEL_ID,
+            models::SPEAKER_MODEL_ID,
+            asr_id.as_str(),
+        ] {
+            ensure_model(&models_dir, id);
+        }
+        let mut asr = build_asr(
+            &AsrConfig::Local {
+                model_id: asr_id.clone(),
+            },
+            &models_dir,
+        )
+        .unwrap();
+        println!("ASR: {}", asr.label());
+        let mut vad = Vad::new(&models_dir).unwrap();
+        let mut diarizer = Diarizer::new(&models_dir).unwrap();
+
+        // Several languages and voices in one stream, 1.2 s of silence between them.
+        let gap = vec![0.0f32; SAMPLE_RATE as usize * 6 / 5];
+        let order = ["en0", "sv_ko", "sv_ja", "sv_zh", "en1"];
+        let mut stream = gap.clone();
+        for name in order {
+            stream.extend(read_wav(&wavs, name));
+            stream.extend(&gap);
+        }
+        let segs = segments(&mut vad, &stream);
+        println!("--- mixed stream: {} segments", segs.len());
+        let mut langs = Vec::new();
+        let mut speakers = BTreeSet::new();
+        let started = std::time::Instant::now();
+        for seg in &segs {
+            let t = asr.transcribe(seg).unwrap();
+            let who = diarizer.assign(seg).unwrap();
+            println!(
+                "[{:>6}-{:>6} ms] {} lang={:?} {}",
+                seg.start_ms, seg.end_ms, who, t.language, t.text
+            );
+            langs.push(t.language.clone().unwrap_or_default());
+            speakers.insert(who);
+        }
+        println!("ASR+diarize time: {:?}", started.elapsed());
+        assert!(segs.len() >= order.len(), "VAD found too few segments");
+        for want in ["en", "ko", "ja", "zh"] {
+            assert!(
+                langs.iter().any(|l| l == want),
+                "language {want} not detected: {langs:?}"
+            );
+        }
+        assert!(
+            speakers.len() >= 4,
+            "expected several speakers, got {speakers:?}"
+        );
+
+        // Same voice vs different voices: two 2 s windows from each clip.
+        let diarizer = Diarizer::new(&models_dir).unwrap();
+        let clips = ["en0", "en1", "sv_ko", "sv_ja", "sv_zh", "sv_en", "sv_yue"];
+        let mut embeddings = Vec::new();
+        for (clip, name) in clips.iter().enumerate() {
+            let samples = read_wav(&wavs, name);
+            for start_s in [0.3f32, 2.5] {
+                let from = (start_s * SAMPLE_RATE as f32) as usize;
+                let window = &samples[from..from + 2 * SAMPLE_RATE as usize];
+                embeddings.push((clip, diarizer.embed(window).expect("embedding")));
+            }
+        }
+        let (mut same_min, mut diff_max) = (f32::MAX, f32::MIN);
+        for (i, (ci, ei)) in embeddings.iter().enumerate() {
+            for (cj, ej) in &embeddings[i + 1..] {
+                let sim = diarize::cosine(ei, ej);
+                if ci == cj {
+                    same_min = same_min.min(sim);
+                } else {
+                    diff_max = diff_max.max(sim);
+                }
+            }
+        }
+        println!("cosine: same voice min {same_min:.3}, different voices max {diff_max:.3}");
+        println!("threshold {}", diarize::SIMILARITY_THRESHOLD);
+        assert!(diff_max < diarize::SIMILARITY_THRESHOLD);
+        assert!(same_min >= diarize::SIMILARITY_THRESHOLD);
     }
 }
