@@ -2738,6 +2738,7 @@ dependencies = [
  "keyring-core",
  "linux-keyutils-keyring-store",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "log",
  "objc2",
  "objc2-core-audio",
@@ -2760,6 +2761,7 @@ dependencies = [
  "uuid",
  "windows-native-keyring-store",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

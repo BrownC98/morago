@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod engine;
+mod gpu;
 mod models;
 mod secrets;
 mod settings;
@@ -41,6 +42,8 @@ pub fn run() {
             commands::update_session_meta,
             commands::delete_session,
             commands::export_session,
+            commands::gpu_status,
+            commands::restart_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

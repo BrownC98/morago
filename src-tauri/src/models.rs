@@ -293,7 +293,8 @@ pub fn download(
     download_spec(models_dir, spec, progress, cancel)
 }
 
-fn download_spec(
+/// Also downloads the GPU pack archives (`gpu.rs`): it reads only `id` and `files`.
+pub(crate) fn download_spec(
     models_dir: &Path,
     spec: &Spec,
     progress: &dyn Fn(DownloadProgress),

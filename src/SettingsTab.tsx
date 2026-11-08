@@ -18,6 +18,7 @@ const SECTIONS = [
   { id: "set-theme", label: "화면" },
   { id: "set-asr", label: "음성 인식" },
   { id: "set-translate", label: "번역" },
+  { id: "set-gpu", label: "GPU 가속" },
   { id: "set-input", label: "소리 입력" },
   { id: "set-save", label: "저장" },
   { id: "set-about", label: "정보" },
@@ -378,6 +379,98 @@ function ProviderCard({ role }: { role: KeyRole }) {
   );
 }
 
+function DeviceRow({ name, device, detail }: { name: string; device: string; detail: string }) {
+  return (
+    <div className="mrow">
+      <span className="n">{name}</span>
+      <span className="s">{device}</span>
+      <span className="fhint">{detail}</span>
+      <span />
+    </div>
+  );
+}
+
+function GpuCard() {
+  const { settings, updateSettings, gpu, notify } = useApp();
+  if (!settings) return null;
+  const chosen = settings.gpu;
+  const names = gpu?.gpus ?? [];
+  const pack = gpu?.pack;
+  const options = [
+    { value: "auto", label: "자동" },
+    ...names.map((n) => ({ value: `device:${n}`, label: n })),
+    ...(chosen.kind === "device" && !names.includes(chosen.name)
+      ? [{ value: `device:${chosen.name}`, label: `${chosen.name} (찾을 수 없음)` }]
+      : []),
+    { value: "off", label: "끔" },
+  ];
+  const tr = gpu?.translate;
+  return (
+    <div className="card">
+      <div className="fld">
+        <span className="flab">GPU 사용</span>
+        <Radios
+          label="GPU 사용"
+          value={chosen.kind === "device" ? `device:${chosen.name}` : chosen.kind}
+          onChange={(v) =>
+            updateSettings({
+              gpu: v.startsWith("device:")
+                ? { kind: "device", name: v.slice("device:".length) }
+                : { kind: v === "off" ? "off" : "auto" },
+            })
+          }
+          options={options}
+        />
+      </div>
+      <span className="fhint">
+        자동: 쓸 수 있는 GPU가 있으면 쓰고, 없으면 CPU에서 돌립니다. GPU 이름을 고르면 그 GPU만 씁니다. 끔: 늘 CPU에서
+        돌립니다. 바꾼 값은 다음 회의를 시작할 때 적용합니다. {gpu?.hint}
+      </span>
+      <div>
+        {pack &&
+          (pack.installed && pack.needs_restart ? (
+            <div className="mrow">
+              <span className="n">GPU 구성 요소</span>
+              <span className="s">{bytes(pack.size_bytes)}</span>
+              <span className="fhint">내려받았습니다. 앱을 다시 시작하면 씁니다.</span>
+              <button
+                type="button"
+                className="ab sm"
+                onClick={() => api.restartApp().catch((e) => notify("error", errText(e)))}
+              >
+                다시 시작
+              </button>
+            </div>
+          ) : (
+            <ModelRow
+              model={{
+                id: pack.id,
+                kind: "translation",
+                name: "GPU 구성 요소",
+                size_bytes: pack.size_bytes,
+                note: pack.note,
+                installed: pack.installed,
+              }}
+            />
+          ))}
+        <DeviceRow
+          name="음성 인식"
+          {...(settings.asr.kind === "local"
+            ? { device: "CPU", detail: "음성 인식은 CPU에서 돌립니다." }
+            : { device: "서비스", detail: "사용자 지정 서비스가 인식합니다." })}
+        />
+        <DeviceRow
+          name="번역"
+          {...(tr
+            ? { device: tr.gpu ? "GPU" : "CPU", detail: tr.detail }
+            : { device: "서비스", detail: "사용자 지정 서비스가 번역합니다." })}
+        />
+        <DeviceRow name="목소리 구간·화자" device="CPU" detail="작은 모델이라 CPU로 충분합니다" />
+      </div>
+    </div>
+  );
+}
+
 export function SettingsTab({ active }: { active: boolean }) {
   const app = useApp();
   const { settings, mics, systemAudio, saveState, settingsTarget } = app;
@@ -481,6 +574,11 @@ export function SettingsTab({ active }: { active: boolean }) {
             <ProviderCard role="translate" />
           </section>
 
+          <section className="grp" id="set-gpu" aria-labelledby="h-gpu">
+            <h2 id="h-gpu">GPU 가속</h2>
+            <GpuCard />
+          </section>
+
           <section className="grp" id="set-input" aria-labelledby="h-in">
             <h2 id="h-in">소리 입력</h2>
             <div className="card">
@@ -534,6 +632,12 @@ export function SettingsTab({ active }: { active: boolean }) {
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0
                   (https://ai.google.dev/gemma/docs/gemma_4_license). 모델 파일은 Google의 Hugging Face 저장소에서 바꾸지 않고 내려받습니다.
                 </li>
+                {app.gpu?.pack && (
+                  <li>
+                    GPU 구성 요소는 NVIDIA CUDA 런타임과 cuBLAS입니다. NVIDIA 서버에서 바꾸지 않고 내려받고, NVIDIA CUDA Toolkit
+                    EULA(https://docs.nvidia.com/cuda/eula/)를 따릅니다.
+                  </li>
+                )}
               </ul>
             </div>
           </section>

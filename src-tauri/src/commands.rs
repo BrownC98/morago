@@ -1,7 +1,8 @@
 //! Tauri commands. The contract is docs/ipc.md.
 //! Errors go to the UI as Korean text; they never contain an API key.
 
-use crate::engine::{self, Running};
+use crate::engine::{self, Running, Sink};
+use crate::gpu;
 use crate::models::{self, ModelInfo};
 use crate::secrets::{self, Role};
 use crate::settings::{self, AsrConfig, Settings, TranslateConfig};
@@ -54,6 +55,8 @@ pub struct AppState {
     session: Mutex<Session>,
     stopped: Condvar,
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The GPU pack (`gpu.rs`).
+    gpu_dir: PathBuf,
 }
 
 impl AppState {
@@ -61,6 +64,8 @@ impl AppState {
         let path = app.path();
         let settings_path = path.app_config_dir()?.join("settings.json");
         let models_dir = path.app_data_dir()?.join("models");
+        let gpu_dir = path.app_data_dir()?.join("gpu");
+        gpu::init(&gpu_dir);
         let bundled_dir = path.resource_dir()?.join("models");
         let default_sessions_dir = path
             .document_dir()
@@ -77,6 +82,7 @@ impl AppState {
             session: Mutex::new(Session::Idle),
             stopped: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
+            gpu_dir,
         })
     }
 
@@ -223,7 +229,9 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
                 Ok(format!("{}: 연결되었습니다.", asr.label()))
             }
             Role::Translate => {
-                let mut t = translate::build_translator(&settings.translate, &models_dir)?;
+                let placement = engine::translate_placement(&settings, &models_dir)?;
+                let mut t =
+                    translate::build_translator(&settings.translate, &models_dir, &placement)?;
                 let out = t.translate("Hello.", Some("en"), &settings.target_language)?;
                 Ok(format!("{}: 연결되었습니다. 시험 번역: {out}", t.label()))
             }
@@ -283,14 +291,18 @@ pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) ->
         d.insert(id.clone(), cancel.clone());
     }
     let models_dir = state.models_dir.clone();
+    let gpu_dir = state.gpu_dir.clone();
     std::thread::spawn(move || {
         let progress_app = app.clone();
         let progress = move |p: DownloadProgress| {
             let _ = progress_app.emit("model-download", p);
         };
-        let error = models::download(&models_dir, &id, &progress, &cancel)
-            .err()
-            .map(|e| e.to_string());
+        let result = if id == gpu::PACK_ID {
+            gpu::download_pack(&gpu_dir, &progress, &cancel)
+        } else {
+            models::download(&models_dir, &id, &progress, &cancel)
+        };
+        let error = result.err().map(|e| e.to_string());
         if let Some(state) = app.try_state::<AppState>() {
             state.downloads.lock().expect("downloads lock").remove(&id);
         }
@@ -367,6 +379,11 @@ pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> CmdResu
     })?;
     let app2 = app.clone();
     let result = blocking(move || app2.state::<AppState>().finish_stop(running)).await;
+    emit_stopped(&app);
+    result
+}
+
+fn emit_stopped(app: &AppHandle) {
     let _ = app.emit(
         "session-state",
         SessionState {
@@ -375,7 +392,57 @@ pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> CmdResu
             started_at: None,
         },
     );
-    result
+}
+
+/// `Sink::fault`: stops and saves the session on its own thread (the caller is
+/// a pipeline thread that the stop joins), then tells the UI with stage "session".
+pub fn stop_after_fault(app: &AppHandle, message: &str) {
+    let app = app.clone();
+    let message = message.to_string();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let saved = match state.begin_stop().map(|r| state.finish_stop(r)) {
+            Some(Ok(s)) => format!("회의를 멈추고 「{}」 기록을 저장했습니다.", s.meta.title),
+            Some(Err(e)) => format!("회의를 멈췄지만 저장하지 못했습니다: {e}."),
+            None => "회의를 멈췄습니다.".into(),
+        };
+        emit_stopped(&app);
+        app.error(
+            "session",
+            None,
+            &format!("{saved} {message} {}", gpu::CHOOSE_OTHER),
+        );
+    });
+}
+
+/// GPUs, the GPU pack and the device of the translation model: the running
+/// session's device, else the device that the settings give.
+#[tauri::command]
+pub async fn gpu_status(state: State<'_, AppState>) -> CmdResult<gpu::GpuStatus> {
+    let settings = state.settings();
+    let running = match &*state.session.lock().expect("session lock") {
+        Session::Running(r) => Some(r.translate_device.clone()),
+        _ => None,
+    };
+    let models_dir = state.models_dir.clone();
+    blocking(move || {
+        let bytes = engine::translate_model_bytes(&settings, &models_dir);
+        let mut status = gpu::status(&settings.gpu, bytes);
+        if let Some(device) = running {
+            status.translate = device;
+        }
+        Ok(status)
+    })
+    .await
+}
+
+/// The GPU pack is loaded at start: a restart uses a new pack.
+#[tauri::command]
+pub fn restart_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    if !matches!(*state.session.lock().expect("session lock"), Session::Idle) {
+        return Err("회의 중에는 다시 시작할 수 없습니다. 회의를 마친 뒤 다시 시작하세요.".into());
+    }
+    app.restart()
 }
 
 #[tauri::command]

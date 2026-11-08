@@ -60,6 +60,30 @@ export type ProviderConfig =
 
 export type ThemeSetting = "light" | "dark" | "system";
 
+/** 자동: the first usable GPU, else the CPU. */
+export type GpuSetting = { kind: "auto" } | { kind: "device"; name: string } | { kind: "off" };
+
+export interface ModelDevice {
+  gpu: boolean;
+  /** "NVIDIA GeForce RTX 5060 Laptop GPU · CUDA", or why the model runs on the CPU. */
+  detail: string;
+}
+
+export interface GpuStatus {
+  gpus: string[];
+  hint: string | null;
+  /** The "GPU 구성 요소" download; null when no GPU can use it. */
+  pack: {
+    id: string;
+    size_bytes: number;
+    installed: boolean;
+    needs_restart: boolean;
+    note: string;
+  } | null;
+  /** Device of the local translation model; null when a service translates. */
+  translate: ModelDevice | null;
+}
+
 export interface Settings {
   theme: ThemeSetting;
   target_language: string;
@@ -70,6 +94,7 @@ export interface Settings {
   capture_system: boolean;
   mic_device: string | null;
   sessions_dir: string | null;
+  gpu: GpuSetting;
 }
 
 export type ModelKind = "asr" | "translation";
@@ -90,7 +115,8 @@ export interface DownloadProgress {
 }
 
 export type KeyRole = "asr" | "translate";
-export type EngineStage = "capture" | "asr" | "translate" | "store" | "model" | "notice";
+/** "session": the core stopped and saved the session after a fault (a GPU error). */
+export type EngineStage = "capture" | "asr" | "translate" | "store" | "model" | "notice" | "session";
 
 export interface PartialText {
   source: SourceKind;
@@ -178,4 +204,6 @@ export const api = {
   deleteSession: (id: string) => call<void>("delete_session", { id }),
   exportSession: (id: string, format: ExportFormat, path: string) =>
     call<void>("export_session", { id, format, path }),
+  gpuStatus: () => call<GpuStatus>("gpu_status"),
+  restartApp: () => call<void>("restart_app"),
 };

@@ -64,6 +64,18 @@ fi
   echo 'set CARGO_PROFILE_DEV_DEBUG=0'
   echo 'set CARGO_PROFILE_TEST_DEBUG=0'
   echo "set \"SHERPA_ONNX_ARCHIVE_DIR=$wroot\\sherpa-onnx\""
+  # CUDA build of llama.cpp (Cargo.toml feature "cuda"): CUDA toolkit (CUDA_PATH),
+  # MSVC environment and Ninja. Its own short target folder: the CPU build of
+  # other worktrees does not rebuild it, and nvcc gets short paths.
+  if grep -q 'features = \["cuda"\]' "$repo/src-tauri/Cargo.toml"; then
+    vs=$("/mnt/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" \
+      -latest -products '*' -property installationPath 2>/dev/null | tr -d '\r')
+    echo 'if not exist "%CUDA_PATH%\bin\nvcc.exe" (echo win-check: CUDA toolkit not found ^(CUDA_PATH^) & exit /b 1)'
+    echo "call \"$vs\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul"
+    echo "set \"PATH=$vs\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;%PATH%\""
+    echo 'set CMAKE_GENERATOR=Ninja'
+    echo 'set "CARGO_TARGET_DIR=%SystemDrive%\mct"'
+  fi
   echo "cd /d \"$wroot\\repo\\src-tauri\""
   for s in "${steps[@]}"; do
     echo "echo ^> $s"
