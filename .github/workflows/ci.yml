@@ -15,9 +15,10 @@ on:
 # A new push to a work branch cancels its older run. Runs on master, the
 # integration branch 회의번역앱 and gate/* always finish: the merge gate waits
 # for the run of an exact commit (a push cancelled it twice on 2026-11-08).
-# Manual runs (installers, e2e) have their own group, so a push does not cancel them.
+# Manual runs have one group per `job` input, so a push or a manual run of
+# the other job does not cancel them.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.job }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/회의번역앱' && !startsWith(github.ref, 'refs/heads/gate/') }}
 
 env:
