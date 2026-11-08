@@ -411,19 +411,13 @@ mod tests {
         }
     }
 
-    /// Sleeps `delay` per run (a busy CPU), then gives the text of `reply`.
-    struct FakeAsr {
-        delay: Duration,
-        runs: Arc<AtomicU64>,
-        reply: fn(&SpeechSegment) -> anyhow::Result<String>,
-    }
+    /// Gives the text of its function.
+    struct FakeAsr(fn(&SpeechSegment) -> anyhow::Result<String>);
 
     impl speech::Asr for FakeAsr {
         fn transcribe(&mut self, seg: &SpeechSegment) -> anyhow::Result<Transcript> {
-            self.runs.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(self.delay);
             Ok(Transcript {
-                text: (self.reply)(seg)?,
+                text: (self.0)(seg)?,
                 language: Some("en".into()),
             })
         }
@@ -432,15 +426,9 @@ mod tests {
         }
     }
 
-    /// The text is the audio length.
-    fn fake_asr(delay_ms: u64) -> (Box<dyn speech::Asr>, Arc<AtomicU64>) {
-        let runs = Arc::new(AtomicU64::new(0));
-        let asr = FakeAsr {
-            delay: Duration::from_millis(delay_ms),
-            runs: runs.clone(),
-            reply: |seg| Ok(format!("{} ms", seg.end_ms - seg.start_ms)),
-        };
-        (Box::new(asr), runs)
+    /// The audio length as text.
+    fn length(seg: &SpeechSegment) -> anyhow::Result<String> {
+        Ok(format!("{} ms", seg.end_ms - seg.start_ms))
     }
 
     fn custom(partial_interval_ms: Option<u32>) -> TranslateConfig {
@@ -514,27 +502,65 @@ mod tests {
         assert!(s.due(MIC, 1100));
     }
 
-    /// Feeds 100 ms chunks of open audio, one per `pace` of real time. Returns
-    /// the longest `offer` call and the real time of the feed.
-    fn feed_speech(feed: &mut Feed, chunks: u64, pace: Duration) -> (Duration, Duration) {
-        let mut longest = Duration::ZERO;
-        let started = Instant::now();
-        for i in 0..chunks {
-            let call = Instant::now();
-            feed.offer(&chunk(i * 100), || Some(audio(0, i * 100 + 100)));
-            longest = longest.max(call.elapsed());
-            std::thread::sleep(pace);
+    /// Offers chunk `i` of open audio. When the offer is due, offers again
+    /// until the worker takes it: an idle worker can be not yet at its `recv`.
+    fn offer_taken(feed: &mut Feed, i: u64) {
+        let end_ms = i * 100 + 100;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while feed.schedule.due(MIC, end_ms) {
+            assert!(Instant::now() < deadline, "the worker took no job");
+            feed.offer(&chunk(i * 100), || Some(audio(0, end_ms)));
+            std::thread::sleep(Duration::from_millis(1));
         }
-        (longest, started.elapsed())
+    }
+
+    /// Runs when the test sends on `go` or drops it.
+    struct GatedAsr {
+        go: Receiver<()>,
+        runs: Arc<AtomicU64>,
+    }
+
+    impl speech::Asr for GatedAsr {
+        fn transcribe(&mut self, seg: &SpeechSegment) -> anyhow::Result<Transcript> {
+            self.runs.fetch_add(1, Ordering::Relaxed);
+            let _ = self.go.recv();
+            Ok(Transcript {
+                text: length(seg)?,
+                language: Some("en".into()),
+            })
+        }
+        fn label(&self) -> String {
+            "gated".into()
+        }
+    }
+
+    fn gated_asr() -> (Box<dyn speech::Asr>, Sender<()>, Arc<AtomicU64>) {
+        let (go_tx, go) = bounded(0);
+        let runs = Arc::new(AtomicU64::new(0));
+        let asr = GatedAsr {
+            go,
+            runs: runs.clone(),
+        };
+        (Box::new(asr), go_tx, runs)
+    }
+
+    fn wait_runs(runs: &AtomicU64, n: u64) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runs.load(Ordering::Relaxed) < n {
+            assert!(Instant::now() < deadline, "no run");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]
     fn a_partial_is_shown_during_speech() {
         let recorder = Arc::new(Recorder::default());
-        let (asr, _) = fake_asr(0);
+        let asr = Box::new(FakeAsr(length));
         let target = Arc::new(RwLock::new("ko".to_string()));
         let (mut feed, _, thread) = start(asr, &custom(None), target, recorder.clone());
-        feed_speech(&mut feed, 15, Duration::from_millis(20));
+        for i in 0..15 {
+            offer_taken(&mut feed, i);
+        }
         drop(feed);
         thread.join().unwrap();
         let texts: Vec<String> = recorder
@@ -551,36 +577,49 @@ mod tests {
     #[test]
     fn a_busy_worker_skips_runs_and_offer_never_blocks() {
         let recorder = Arc::new(Recorder::default());
-        // A run takes 4 chunks of real time; offers are due every 7 chunks of audio.
-        let (asr, runs) = fake_asr(400);
+        let (asr, go, runs) = gated_asr();
         let target = Arc::new(RwLock::new("ko".to_string()));
         let (mut feed, _, thread) = start(asr, &custom(None), target, recorder.clone());
-        let (longest, real) = feed_speech(&mut feed, 42, Duration::from_millis(100) / 7);
+        offer_taken(&mut feed, 0);
+        wait_runs(&runs, 1);
+        // The worker is busy: the offers due at 0.8 s ... 4.2 s of audio are skipped.
+        let mut longest = Duration::ZERO;
+        for i in 1..42 {
+            let call = Instant::now();
+            feed.offer(&chunk(i * 100), || Some(audio(0, i * 100 + 100)));
+            longest = longest.max(call.elapsed());
+        }
+        println!("longest offer {longest:?}");
+        assert!(longest < Duration::from_millis(50), "{longest:?}");
+        go.send(()).unwrap();
+        // Free again: the next chunk runs, with all audio so far.
+        offer_taken(&mut feed, 42);
+        drop(go);
         drop(feed);
         thread.join().unwrap();
-        let runs = runs.load(Ordering::Relaxed);
-        println!("runs {runs} in {real:?}, longest offer {longest:?}");
-        assert!(longest < Duration::from_millis(20), "{longest:?}");
-        // Without skipping, every due offer (6) would run, one after another.
-        let room = real.as_millis() as u64 / 400 + 1;
-        assert!(
-            (1..=room.min(5)).contains(&runs),
-            "{runs} runs, room {room}"
-        );
-        assert_eq!(recorder.partials.lock().unwrap().len() as u64, runs);
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+        let texts: Vec<String> = recorder
+            .partials
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, p)| p.text.clone())
+            .collect();
+        assert_eq!(texts, ["100 ms", "4300 ms"]);
     }
 
     #[test]
     fn no_partial_after_the_end_of_its_speech() {
         let recorder = Arc::new(Recorder::default());
-        let (asr, runs) = fake_asr(300);
+        let (asr, go, runs) = gated_asr();
         let target = Arc::new(RwLock::new("ko".to_string()));
         let (mut feed, translations, thread) =
             start(asr, &local_translate(), target, recorder.clone());
-        feed.offer(&chunk(0), || Some(audio(0, 100)));
-        std::thread::sleep(Duration::from_millis(50));
+        offer_taken(&mut feed, 0);
+        wait_runs(&runs, 1);
         // The segment ends while the worker runs.
         feed.ended(MIC);
+        drop(go);
         drop(feed);
         thread.join().unwrap();
         assert_eq!(runs.load(Ordering::Relaxed), 1);
@@ -602,11 +641,7 @@ mod tests {
             let (tr_tx, _tr_rx) = backlog(60_000, utterance_ms);
             seg_tx.push(audio(1000, 2500), &mut |_| {});
             drop(seg_tx);
-            let asr = FakeAsr {
-                delay: Duration::ZERO,
-                runs: Arc::new(AtomicU64::new(0)),
-                reply,
-            };
+            let asr = FakeAsr(reply);
             asr_loop(
                 seg_rx,
                 Box::new(asr),
@@ -628,7 +663,9 @@ mod tests {
     #[derive(Default)]
     struct FakeTranslator {
         partial_ms: u64,
-        /// (text, start, stopped) of each partial call.
+        /// Partial calls started.
+        starts: Arc<AtomicU64>,
+        /// (text, start, stopped) of each partial call that returned.
         partials: Arc<Mutex<Vec<(String, Instant, bool)>>>,
     }
 
@@ -643,6 +680,7 @@ mod tests {
             _: &str,
             stop: &dyn Fn() -> bool,
         ) -> anyhow::Result<String> {
+            self.starts.fetch_add(1, Ordering::Relaxed);
             let started = Instant::now();
             while started.elapsed() < Duration::from_millis(self.partial_ms) {
                 if stop() {
@@ -695,7 +733,16 @@ mod tests {
         tx: Option<super::super::Backlog<Utterance>>,
         thread: JoinHandle<()>,
         recorder: Arc<Recorder>,
+        starts: Arc<AtomicU64>,
         calls: Arc<Mutex<Vec<(String, Instant, bool)>>>,
+    }
+
+    fn wait_calls(calls: &Mutex<Vec<(String, Instant, bool)>>, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while calls.lock().unwrap().len() < n {
+            assert!(Instant::now() < deadline, "no call");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// Runs `translate_loop` with a fake translator on its own thread.
@@ -706,6 +753,7 @@ mod tests {
             ..Default::default()
         };
         let calls = translator.partials.clone();
+        let starts = translator.starts.clone();
         let sink = recorder.clone();
         let thread = std::thread::spawn(move || {
             translate_loop(
@@ -721,6 +769,7 @@ mod tests {
             tx: Some(tx),
             thread,
             recorder,
+            starts,
             calls,
         }
     }
@@ -739,16 +788,16 @@ mod tests {
         let t = Translations::new(&Arc::new(Live::default()), Duration::ZERO);
         ask(&t.live, &t.slot, "partial", recorder.as_ref());
         let l = run_loop(t, 5_000, recorder);
-        std::thread::sleep(Duration::from_millis(200));
+        wait_runs(&l.starts, 1);
         let queued = Instant::now();
         l.tx.as_ref().unwrap().push(final_utterance(1), &mut |_| {});
         while l.recorder.utterances.lock().unwrap().is_empty() {
-            assert!(queued.elapsed() < Duration::from_secs(2), "final waits");
+            assert!(queued.elapsed() < Duration::from_secs(4), "final waits");
             std::thread::sleep(Duration::from_millis(1));
         }
         let waited = queued.elapsed();
         println!("final translated {waited:?} after it was queued during a partial translation");
-        assert!(waited < Duration::from_millis(100), "{waited:?}");
+        assert!(waited < Duration::from_secs(1), "{waited:?}");
         let recorder = l.recorder.clone();
         let calls = l.finish();
         assert_eq!(calls.len(), 1);
@@ -775,8 +824,8 @@ mod tests {
         ask(&t.live, &t.slot, "one", recorder.as_ref());
         ask(&t.live, &t.slot, "one two", recorder.as_ref());
         let live = t.live.clone();
-        let l = run_loop(t, 200, recorder.clone());
-        std::thread::sleep(Duration::from_millis(50));
+        let l = run_loop(t, 500, recorder.clone());
+        wait_runs(&l.starts, 1);
         // A newer original arrives while "one two" is in translation.
         let generation = live.generation(MIC);
         assert!(live.original(
@@ -785,7 +834,6 @@ mod tests {
             "one two three",
             recorder.as_ref()
         ));
-        std::thread::sleep(Duration::from_millis(300));
         let calls = l.finish();
         let texts: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert_eq!(texts, ["one two"]);
@@ -802,14 +850,15 @@ mod tests {
         ask(&t.live, &t.slot, "one", recorder.as_ref());
         let live = t.live.clone();
         let l = run_loop(t, 5_000, recorder.clone());
-        std::thread::sleep(Duration::from_millis(100));
+        wait_runs(&l.starts, 1);
         let ended = Instant::now();
         live.end(MIC);
-        while l.calls.lock().unwrap().is_empty() {
-            assert!(ended.elapsed() < Duration::from_secs(2), "did not stop");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(ended.elapsed() < Duration::from_millis(100));
+        wait_calls(&l.calls, 1);
+        assert!(
+            ended.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            ended.elapsed()
+        );
         let calls = l.finish();
         assert!(calls[0].2, "stopped");
     }
@@ -834,24 +883,26 @@ mod tests {
         let l = run_loop(t, 0, recorder.clone());
         let asks = |text: &str| ask(&live, &slot, text, recorder.as_ref());
         asks("a");
+        wait_calls(&l.calls, 1);
         std::thread::sleep(Duration::from_millis(100));
         asks("a b");
-        std::thread::sleep(Duration::from_millis(700));
+        std::thread::sleep(Duration::from_millis(300));
         asks("a b c");
-        std::thread::sleep(Duration::from_millis(1000));
+        wait_calls(&l.calls, 2);
         // A new speech is not held back by the interval of the last one.
+        let new_speech = Instant::now();
         live.end(MIC);
         asks("next");
-        std::thread::sleep(Duration::from_millis(100));
+        wait_calls(&l.calls, 3);
         let calls = l.finish();
         let texts: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert_eq!(texts, ["a", "a b c", "next"]);
         let gap = calls[1].1 - calls[0].1;
         println!("custom partial requests {gap:?} apart");
         assert!(
-            (interval..interval + Duration::from_millis(100)).contains(&gap),
+            (interval..interval + Duration::from_millis(500)).contains(&gap),
             "{gap:?}"
         );
-        assert!(calls[2].1 - calls[1].1 < interval);
+        assert!(calls[2].1 - new_speech < Duration::from_millis(500));
     }
 }

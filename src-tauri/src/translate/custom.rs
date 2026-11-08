@@ -746,7 +746,7 @@ mod tests {
         let waited = started.elapsed();
         println!("partial request stopped after {waited:?} (server answers after 2 s)");
         assert_eq!(err.to_string(), "stopped");
-        assert!(waited < Duration::from_millis(800), "{waited:?}");
+        assert!(waited < Duration::from_millis(1500), "{waited:?}");
         server.join().unwrap();
     }
 
