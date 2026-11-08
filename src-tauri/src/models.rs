@@ -149,7 +149,7 @@ const SPECS: &[Spec] = &[
         name: "CAM++ 화자 임베딩 (중국어·영어)",
         note: "화자 구분",
         files: &[FileSpec {
-            url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+            url: "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
             name: SPEAKER_FILE,
             size: 28_281_164,
         }],
