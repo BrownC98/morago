@@ -571,7 +571,15 @@ mod tests {
             .filter(|l| l.contains("(undefined)") && !l.contains("weak"))
             .collect();
         assert!(strong.is_empty(), "strong imports: {strong:#?}");
-        let undef: Vec<&str> = text.lines().filter(|l| l.contains("(undefined)") && l.contains("CoreAudio")).collect();
-        panic!("DIAGNOSTIC total={} stderr={} undefined-from-CoreAudio={:#?}", text.lines().count(), String::from_utf8_lossy(&out.stderr), undef);
+        let undef: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("(undefined)") && l.contains("CoreAudio"))
+            .collect();
+        panic!(
+            "DIAGNOSTIC total={} stderr={} undefined-from-CoreAudio={:#?}",
+            text.lines().count(),
+            String::from_utf8_lossy(&out.stderr),
+            undef
+        );
     }
 }
