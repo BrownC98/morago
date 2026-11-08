@@ -2,14 +2,78 @@
 
 use super::{History, Translator, clean_output, system_prompt};
 use crate::secrets::Secret;
-use crate::settings::ReasoningEffort;
 use crate::types::Endpoint;
 use anyhow::{Context, anyhow};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::time::Duration;
 
 /// Longest server error text put into a message.
 const MAX_ERROR_CHARS: usize = 300;
+
+/// `extra_body` key names that hold a credential, compared lowercased with
+/// `-` read as `_`.
+const KEY_NAMES: [&str; 9] = [
+    "api_key",
+    "apikey",
+    "x_api_key",
+    "authorization",
+    "access_token",
+    "client_secret",
+    "secret",
+    "password",
+    "key",
+];
+
+/// Checks the text of the `extra_body` setting. Blank text is an empty object.
+/// The Korean reason never contains values of the text.
+pub fn check_extra_body(text: &str) -> Result<Map<String, Value>, String> {
+    if text.trim().is_empty() {
+        return Ok(Map::new());
+    }
+    let value: Value = serde_json::from_str(text)
+        .map_err(|e| format!("JSON 형식이 아닙니다 ({}번째 줄)", e.line()))?;
+    let Value::Object(map) = value else {
+        return Err("{ }로 감싼 JSON 객체를 적으세요".into());
+    };
+    check_extra_body_map(&map)?;
+    Ok(map)
+}
+
+/// The rules of `check_extra_body` for a parsed object.
+pub fn check_extra_body_map(map: &Map<String, Value>) -> Result<(), String> {
+    if has_credential(map) {
+        return Err("API 키는 이 칸에 적지 않습니다. 위의 API 키 칸을 쓰세요".into());
+    }
+    if map.contains_key("model") {
+        return Err("\"model\"은 [모델] 칸에 적으세요".into());
+    }
+    if map.contains_key("messages") || map.contains_key("stream") {
+        return Err("\"messages\"와 \"stream\"은 앱이 정합니다".into());
+    }
+    Ok(())
+}
+
+fn has_credential(map: &Map<String, Value>) -> bool {
+    map.iter().any(|(name, value)| {
+        let name = name.to_lowercase().replace('-', "_");
+        KEY_NAMES.contains(&name.as_str()) || value_has_credential(value)
+    })
+}
+
+fn value_has_credential(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => has_credential(map),
+        Value::Array(items) => items.iter().any(value_has_credential),
+        Value::String(text) => {
+            let text = text.trim_start();
+            text.starts_with("sk-")
+                || text
+                    .get(..7)
+                    .is_some_and(|start| start.eq_ignore_ascii_case("bearer "))
+        }
+        _ => false,
+    }
+}
 
 pub(crate) struct CustomTranslator {
     endpoint: Endpoint,
@@ -17,41 +81,20 @@ pub(crate) struct CustomTranslator {
     key: Option<Secret>,
     client: reqwest::blocking::Client,
     history: History,
-    /// Sent as `reasoning_effort` unless the server refused it.
-    effort: Option<ReasoningEffort>,
-    /// Optional parameters that the server refused. Left out of each request
+    /// The `extra_body` setting, merged into each request.
+    extra_body: Map<String, Value>,
+    /// Top-level keys that the server refused. Left out of each request
     /// for the life of this translator.
-    refused: Vec<Param>,
-    /// The "not supported" message that waits for `take_notice`. Set once.
+    refused: Vec<String>,
+    /// The "not supported" message that waits for `take_notice`.
     notice: Option<String>,
 }
-
-/// An optional request parameter that a server can refuse with HTTP 400.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Param {
-    /// `temperature`: OpenAI reasoning models accept only the default (1).
-    Temperature,
-    ReasoningEffort,
-}
-
-impl Param {
-    /// The word that a server error names for this parameter.
-    fn word(self) -> &'static str {
-        match self {
-            Param::Temperature => "temperature",
-            Param::ReasoningEffort => "reasoning",
-        }
-    }
-}
-
-/// Shown once when a server refuses `reasoning_effort`.
-const EFFORT_UNSUPPORTED: &str = "이 서버는 추론 강도 설정을 지원하지 않습니다";
 
 impl CustomTranslator {
     pub(crate) fn new(
         endpoint: Endpoint,
         key: Option<Secret>,
-        effort: Option<ReasoningEffort>,
+        extra_body: Map<String, Value>,
     ) -> anyhow::Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -68,41 +111,34 @@ impl CustomTranslator {
             key,
             client,
             history: History::default(),
-            effort,
+            extra_body,
             refused: Vec::new(),
             notice: None,
         })
     }
 
     fn request_body(&self, text: &str, source: Option<&str>, target: &str) -> Value {
-        let mut body = json!({
-            "model": self.endpoint.model,
-            "stream": false,
-            "messages": [
+        let mut body = self.optional_params();
+        body.insert("model".into(), json!(self.endpoint.model));
+        body.insert("stream".into(), json!(false));
+        body.insert(
+            "messages".into(),
+            json!([
                 {"role": "system", "content": system_prompt(source, target, &self.history)},
                 {"role": "user", "content": text},
-            ],
-        });
-        for param in self.sent_params() {
-            match param {
-                Param::Temperature => body["temperature"] = json!(0.2),
-                Param::ReasoningEffort => {
-                    if let Some(effort) = self.effort {
-                        body["reasoning_effort"] = json!(effort.as_str());
-                    }
-                }
-            }
-        }
-        body
+            ]),
+        );
+        Value::Object(body)
     }
 
-    /// The optional parameters that the next request sends.
-    fn sent_params(&self) -> Vec<Param> {
-        let mut params = vec![Param::Temperature];
-        if self.effort.is_some() {
-            params.push(Param::ReasoningEffort);
-        }
-        params.retain(|p| !self.refused.contains(p));
+    /// The keys that the next request sends besides the app keys, which a
+    /// server can refuse with HTTP 400: `extra_body` and the app default
+    /// `temperature` (OpenAI reasoning models accept only the default, 1).
+    fn optional_params(&self) -> Map<String, Value> {
+        let mut params = Map::new();
+        params.insert("temperature".into(), json!(0.2));
+        params.extend(self.extra_body.clone());
+        params.retain(|name, _| !self.refused.contains(name));
         params
     }
 
@@ -153,21 +189,32 @@ fn error_text(body: &str) -> String {
     text.to_string()
 }
 
-/// The first parameter of `sent` that a 400 body names, in `error.param`
-/// or in the error text.
-fn refused_param(body: &str, sent: &[Param]) -> Option<Param> {
+/// The first key of `sent` that a 400 body names as a whole word: in
+/// `error.param`, else in the error text.
+fn refused_param(body: &str, sent: &[String]) -> Option<String> {
     let param = serde_json::from_str::<Value>(body)
         .ok()
-        .and_then(|v| {
-            v.pointer("/error/param")?
-                .as_str()
-                .map(str::to_ascii_lowercase)
-        })
+        .and_then(|v| v.pointer("/error/param")?.as_str().map(str::to_lowercase))
         .unwrap_or_default();
-    let text = error_text(body).to_ascii_lowercase();
-    sent.iter()
-        .copied()
-        .find(|p| param.contains(p.word()) || text.contains(p.word()))
+    let text = error_text(body).to_lowercase();
+    [param, text].iter().find_map(|named| {
+        sent.iter()
+            .find(|name| has_word(named, &name.to_lowercase()))
+            .cloned()
+    })
+}
+
+/// True if `word` is in `text` and not part of a longer name.
+fn has_word(text: &str, word: &str) -> bool {
+    let name_char = |c: char| c.is_alphanumeric() || c == '_';
+    !word.is_empty()
+        && text.match_indices(word).any(|(at, _)| {
+            !text[..at].chars().next_back().is_some_and(name_char)
+                && !text[at + word.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(name_char)
+        })
 }
 
 /// Cuts user-facing server text. Call it after `redact`: a key cut in half
@@ -195,37 +242,47 @@ impl Translator for CustomTranslator {
         target_language: &str,
     ) -> anyhow::Result<String> {
         self.history.set_target(target_language);
-        // A 400 that names an optional parameter (temperature, reasoning_effort):
-        // the server does not accept it. Retry once without it, at most once per
-        // parameter. Any other 400 (bad model, bad request) is reported as it is.
+        // A 400 that names an optional key (`extra_body` or temperature): the
+        // server does not accept it. Retry once without it, at most once per
+        // key. Any other 400 (bad model, bad request) is reported as it is.
         let mut dropped = Vec::new();
         let (status, response_text) = loop {
             let body = self.request_body(text, source_language, target_language);
             let reply = match self.post(&body) {
                 Ok(reply) => reply,
                 Err(e) => {
-                    self.refused.retain(|p| !dropped.contains(p));
+                    self.refused.retain(|k| !dropped.contains(k));
                     return Err(e);
                 }
             };
+            let sent: Vec<String> = self.optional_params().keys().cloned().collect();
             let refused = (reply.0 == 400)
-                .then(|| refused_param(&reply.1, &self.sent_params()))
+                .then(|| refused_param(&reply.1, &sent))
                 .flatten();
             match refused {
-                Some(param) => {
-                    dropped.push(param);
-                    self.refused.push(param);
+                Some(name) => {
+                    dropped.push(name.clone());
+                    self.refused.push(name);
                 }
                 None => break reply,
             }
         };
         if (200..300).contains(&status) {
-            // The parameters were the cause: they stay out for the rest of the session.
-            if dropped.contains(&Param::ReasoningEffort) {
-                self.notice = Some(EFFORT_UNSUPPORTED.to_string());
+            // The keys were the cause: they stay out for the rest of the session.
+            // The app default temperature is not a user setting: no notice.
+            let user_keys: Vec<String> = dropped
+                .iter()
+                .filter(|k| self.extra_body.contains_key(k.as_str()))
+                .map(|k| format!("\"{k}\""))
+                .collect();
+            if !user_keys.is_empty() {
+                self.notice = Some(format!(
+                    "이 서버는 {} 값을 받지 않아 빼고 보냈습니다",
+                    user_keys.join(", ")
+                ));
             }
         } else {
-            self.refused.retain(|p| !dropped.contains(p));
+            self.refused.retain(|k| !dropped.contains(k));
         }
         let success = (200..300).contains(&status);
         if !success {
@@ -321,19 +378,20 @@ mod tests {
     }
 
     fn translator(base_url: String, key: Option<&str>) -> CustomTranslator {
-        translator_with(base_url, key, None)
+        translator_with(base_url, key, json!({}))
     }
 
-    fn translator_with(
-        base_url: String,
-        key: Option<&str>,
-        effort: Option<ReasoningEffort>,
-    ) -> CustomTranslator {
+    fn translator_with(base_url: String, key: Option<&str>, extra_body: Value) -> CustomTranslator {
         let endpoint = Endpoint {
             base_url,
             model: "gpt-test".into(),
         };
-        CustomTranslator::new(endpoint, key.map(|k| Secret::new(k.into())), effort).unwrap()
+        let extra_body = extra_body.as_object().unwrap().clone();
+        CustomTranslator::new(endpoint, key.map(|k| Secret::new(k.into())), extra_body).unwrap()
+    }
+
+    fn notice_for(key: &str) -> String {
+        format!("이 서버는 \"{key}\" 값을 받지 않아 빼고 보냈습니다")
     }
 
     fn ok_body(content: &str) -> String {
@@ -507,34 +565,42 @@ mod tests {
     }
 
     #[test]
-    fn body_has_no_reasoning_effort_by_default() {
+    fn extra_body_is_merged_under_the_app_keys() {
         let (base_url, server) = mock_server("200 OK", &ok_body("하나"));
-        let mut t = translator(base_url, None);
+        let mut t = translator_with(
+            base_url,
+            None,
+            json!({
+                "reasoning_effort": "none",
+                "chat_template_kwargs": {"enable_thinking": false},
+                "max_tokens": 200,
+            }),
+        );
+        // `check_extra_body` refuses app keys; the body must not let them through anyway.
+        t.extra_body.insert("model".into(), json!("other"));
+        t.extra_body.insert("stream".into(), json!(true));
         t.translate("one", Some("en"), "ko").unwrap();
         let body = request_json(&server.join().unwrap());
-        assert!(body.get("reasoning_effort").is_none(), "{body}");
+        assert_eq!(body["reasoning_effort"], "none", "{body}");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(body["max_tokens"], 200);
+        assert_eq!(body["temperature"], 0.2);
+        assert_eq!(body["model"], "gpt-test");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["messages"][1]["content"], "one");
+        assert_eq!(t.take_notice(), None);
     }
 
     #[test]
-    fn body_has_the_chosen_reasoning_effort() {
-        for effort in [
-            ReasoningEffort::Off,
-            ReasoningEffort::Minimal,
-            ReasoningEffort::Low,
-            ReasoningEffort::Medium,
-            ReasoningEffort::High,
-        ] {
-            let (base_url, server) = mock_server("200 OK", &ok_body("하나"));
-            let mut t = translator_with(base_url, None, Some(effort));
-            t.translate("one", Some("en"), "ko").unwrap();
-            let body = request_json(&server.join().unwrap());
-            assert_eq!(body["reasoning_effort"], effort.as_str(), "{body}");
-            assert_eq!(t.take_notice(), None);
-        }
+    fn extra_body_temperature_replaces_the_default() {
+        let (base_url, server) = mock_server("200 OK", &ok_body("하나"));
+        let mut t = translator_with(base_url, None, json!({"temperature": 1}));
+        t.translate("one", Some("en"), "ko").unwrap();
+        assert_eq!(request_json(&server.join().unwrap())["temperature"], 1);
     }
 
     #[test]
-    fn a_400_about_reasoning_retries_once_without_it_and_notes_once() {
+    fn a_400_about_a_user_key_retries_once_without_it_and_notes_once() {
         let refusal = json!({"error": {"message": "Unrecognized request argument supplied: reasoning_effort"}})
             .to_string();
         let (base_url, server) = mock_server_seq(vec![
@@ -542,27 +608,65 @@ mod tests {
             ("200 OK", ok_body("하나")),
             ("200 OK", ok_body("둘")),
         ]);
-        let mut t = translator_with(base_url, None, Some(ReasoningEffort::High));
+        let mut t = translator_with(
+            base_url,
+            None,
+            json!({"reasoning_effort": "high", "top_p": 0.9}),
+        );
         assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
-        assert_eq!(t.take_notice().as_deref(), Some(EFFORT_UNSUPPORTED));
-        // The next request does not send the field, and there is no second notice.
+        assert_eq!(t.take_notice(), Some(notice_for("reasoning_effort")));
+        // The next request does not send the key, and there is no second notice.
         assert_eq!(t.translate("two", Some("en"), "ko").unwrap(), "둘");
         assert_eq!(t.take_notice(), None);
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 3);
         assert_eq!(request_json(&requests[0])["reasoning_effort"], "high");
-        assert!(request_json(&requests[1]).get("reasoning_effort").is_none());
-        assert!(request_json(&requests[2]).get("reasoning_effort").is_none());
+        for raw in &requests[1..] {
+            let body = request_json(raw);
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert_eq!(body["top_p"], 0.9, "{body}");
+        }
     }
 
     #[test]
-    fn a_400_about_something_else_is_an_error_and_keeps_the_field() {
+    fn error_param_names_the_key() {
+        let refusal =
+            json!({"error": {"message": "Unsupported parameter.", "param": "top_k"}}).to_string();
+        let (base_url, server) = mock_server_seq(vec![
+            ("400 Bad Request", refusal),
+            ("200 OK", ok_body("하나")),
+        ]);
+        let mut t = translator_with(base_url, None, json!({"top_k": 20}));
+        assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
+        assert_eq!(t.take_notice(), Some(notice_for("top_k")));
+        let requests = server.join().unwrap();
+        assert!(request_json(&requests[1]).get("top_k").is_none());
+    }
+
+    #[test]
+    fn a_key_inside_a_longer_name_is_not_refused() {
+        let sent = ["tokens".to_string(), "temperature".to_string()];
+        let body = |m: &str| json!({"error": {"message": m}}).to_string();
+        assert_eq!(refused_param(&body("max_tokens is too large"), &sent), None);
+        assert_eq!(refused_param(&body("bad 'temperatures'"), &sent), None);
+        assert_eq!(
+            refused_param(&body("'tokens' is not supported"), &sent).as_deref(),
+            Some("tokens")
+        );
+        assert_eq!(
+            refused_param(&body("Unknown: TEMPERATURE."), &sent).as_deref(),
+            Some("temperature")
+        );
+    }
+
+    #[test]
+    fn a_400_about_something_else_is_an_error_and_keeps_the_key() {
         let refusal = json!({"error": {"message": "model not found"}}).to_string();
         let (base_url, server) = mock_server_seq(vec![
             ("400 Bad Request", refusal),
             ("200 OK", ok_body("하나")),
         ]);
-        let mut t = translator_with(base_url, None, Some(ReasoningEffort::Low));
+        let mut t = translator_with(base_url, None, json!({"reasoning_effort": "low"}));
         let err = t
             .translate("one", Some("en"), "ko")
             .unwrap_err()
@@ -579,13 +683,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_retry_reports_its_error_and_keeps_the_field() {
+    fn a_failed_retry_reports_its_error_and_keeps_the_key() {
         let refusal = json!({"error": {"message": "unknown field reasoning_effort"}}).to_string();
         let (base_url, server) = mock_server_seq(vec![
             ("400 Bad Request", refusal),
             ("500 Internal Server Error", "{\"error\":\"boom\"}".into()),
         ]);
-        let mut t = translator_with(base_url, None, Some(ReasoningEffort::Medium));
+        let mut t = translator_with(base_url, None, json!({"reasoning_effort": "medium"}));
         let err = t
             .translate("one", Some("en"), "ko")
             .unwrap_err()
@@ -593,7 +697,7 @@ mod tests {
         server.join().unwrap();
         assert!(err.contains("500") && err.contains("boom"), "{err}");
         assert_eq!(t.take_notice(), None);
-        assert_eq!(t.effort, Some(ReasoningEffort::Medium));
+        assert_eq!(t.extra_body["reasoning_effort"], "medium");
         assert!(t.refused.is_empty());
     }
 
@@ -611,9 +715,9 @@ mod tests {
             ("200 OK", ok_body("하나")),
             ("200 OK", ok_body("둘")),
         ]);
-        let mut t = translator_with(base_url, None, Some(ReasoningEffort::Low));
+        let mut t = translator_with(base_url, None, json!({"reasoning_effort": "low"}));
         assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
-        // Temperature is not a user setting: no notice.
+        // The app default temperature is not a user setting: no notice.
         assert_eq!(t.take_notice(), None);
         assert_eq!(t.translate("two", Some("en"), "ko").unwrap(), "둘");
         let requests = server.join().unwrap();
@@ -624,6 +728,21 @@ mod tests {
             assert!(body.get("temperature").is_none(), "{body}");
             assert_eq!(body["reasoning_effort"], "low", "{body}");
         }
+    }
+
+    #[test]
+    fn a_refused_user_temperature_gives_a_notice_and_no_default() {
+        let refusal = json!({"error": {"message": "x", "param": "temperature"}}).to_string();
+        let (base_url, server) = mock_server_seq(vec![
+            ("400 Bad Request", refusal),
+            ("200 OK", ok_body("하나")),
+        ]);
+        let mut t = translator_with(base_url, None, json!({"temperature": 0.7}));
+        assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
+        assert_eq!(t.take_notice(), Some(notice_for("temperature")));
+        let requests = server.join().unwrap();
+        assert_eq!(request_json(&requests[0])["temperature"], 0.7);
+        assert!(request_json(&requests[1]).get("temperature").is_none());
     }
 
     #[test]
@@ -638,9 +757,9 @@ mod tests {
             ("200 OK", ok_body("하나")),
             ("200 OK", ok_body("둘")),
         ]);
-        let mut t = translator_with(base_url, None, Some(ReasoningEffort::High));
+        let mut t = translator_with(base_url, None, json!({"reasoning_effort": "high"}));
         assert_eq!(t.translate("one", Some("en"), "ko").unwrap(), "하나");
-        assert_eq!(t.take_notice().as_deref(), Some(EFFORT_UNSUPPORTED));
+        assert_eq!(t.take_notice(), Some(notice_for("reasoning_effort")));
         assert_eq!(t.translate("two", Some("en"), "ko").unwrap(), "둘");
         assert_eq!(t.take_notice(), None);
         let requests = server.join().unwrap();
@@ -673,5 +792,62 @@ mod tests {
         assert!(err.contains("400"), "{err}");
         assert_eq!(server.join().unwrap().len(), 2);
         assert!(t.refused.is_empty());
+    }
+
+    #[test]
+    fn check_accepts_objects_and_blank_text() {
+        assert_eq!(check_extra_body("  \n").unwrap(), Map::new());
+        let map = check_extra_body(
+            r#"{"reasoning_effort": "low", "temperature": 0.2, "max_tokens": 100,
+                "top_k": 20, "extra": {"key_words": ["a"], "monkey": "sky-blue"}}"#,
+        )
+        .unwrap();
+        assert_eq!(map["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn check_reasons_have_no_values() {
+        let err = check_extra_body("{\n\"a\": \"sk-secret-123\",,\n}").unwrap_err();
+        assert_eq!(err, "JSON 형식이 아닙니다 (2번째 줄)");
+        for text in ["[1]", "\"low\"", "3"] {
+            assert_eq!(
+                check_extra_body(text).unwrap_err(),
+                "{ }로 감싼 JSON 객체를 적으세요"
+            );
+        }
+        assert_eq!(
+            check_extra_body(r#"{"model": "x"}"#).unwrap_err(),
+            "\"model\"은 [모델] 칸에 적으세요"
+        );
+        for text in [r#"{"messages": []}"#, r#"{"stream": true}"#] {
+            assert_eq!(
+                check_extra_body(text).unwrap_err(),
+                "\"messages\"와 \"stream\"은 앱이 정합니다"
+            );
+        }
+    }
+
+    #[test]
+    fn check_refuses_keys_at_any_depth() {
+        let refused = "API 키는 이 칸에 적지 않습니다. 위의 API 키 칸을 쓰세요";
+        for text in [
+            r#"{"api_key": "x"}"#,
+            r#"{"API-Key": "x"}"#,
+            r#"{"apikey": "x"}"#,
+            r#"{"x-api-key": "x"}"#,
+            r#"{"headers": {"Authorization": "x"}}"#,
+            r#"{"a": [{"access_token": "x"}]}"#,
+            r#"{"client_secret": "x"}"#,
+            r#"{"secret": "x"}"#,
+            r#"{"password": "x"}"#,
+            r#"{"key": "x"}"#,
+            r#"{"a": "sk-proj-123"}"#,
+            r#"{"a": ["Bearer abc"]}"#,
+            r#"{"a": {"b": " bearer abc"}}"#,
+            // A key is refused before the app key rule.
+            r#"{"model": "m", "api_key": "x"}"#,
+        ] {
+            assert_eq!(check_extra_body(text).unwrap_err(), refused, "{text}");
+        }
     }
 }

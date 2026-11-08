@@ -8,6 +8,8 @@
 mod custom;
 mod local;
 
+pub use custom::{check_extra_body, check_extra_body_map};
+
 use crate::settings::TranslateConfig;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -42,13 +44,13 @@ pub fn build_translator(
         )?)),
         TranslateConfig::Custom {
             endpoint,
-            reasoning_effort,
+            extra_body,
         } => {
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
             Ok(Box::new(custom::CustomTranslator::new(
                 endpoint.clone(),
                 key,
-                *reasoning_effort,
+                extra_body.clone(),
             )?))
         }
     }
