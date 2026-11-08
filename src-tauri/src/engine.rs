@@ -459,14 +459,29 @@ mod tests {
 
     /// End to end without audio devices: speech clips go into the pipeline as
     /// 100 ms chunks of two sources, then the saved session is read back.
-    /// Run: MORAGO_TEST_MODELS=<dir with silero-vad, speaker-campplus,
-    /// whisper-base, qwen2.5-1.5b-instruct-q4> MORAGO_TEST_WAVS=<dir with
-    /// en0.wav, sv_ko.wav, sv_ja.wav> cargo test --release engine -- --ignored --nocapture
+    /// Run: MORAGO_TEST_MODELS=<models folder; missing models are downloaded>
+    /// MORAGO_TEST_WAVS=<folder with en0.wav, sv_ko.wav, sv_ja.wav>
+    /// LLAMA_LIB_PROFILE=Release cargo test --lib engine -- --ignored --nocapture
+    /// CI runs it on Windows and macOS (job e2e, manual runs). On Linux it
+    /// aborts at the first onnxruntime call when llama.cpp is linked too
+    /// (std::regex clash, found 2026-11-08); Linux is not a target.
     #[test]
     #[ignore]
     fn pipeline_end_to_end() {
         use crate::settings::{AsrConfig, TranslateConfig};
         let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
+        let ids = [
+            models::VAD_MODEL_ID,
+            models::SPEAKER_MODEL_ID,
+            "whisper-base",
+            "qwen2.5-1.5b-instruct-q4",
+        ];
+        for id in ids {
+            if !models::is_installed(&models_dir, id) {
+                let cancel = std::sync::atomic::AtomicBool::new(false);
+                models::download(&models_dir, id, &|_| {}, &cancel).unwrap();
+            }
+        }
         let wavs = PathBuf::from(std::env::var("MORAGO_TEST_WAVS").unwrap());
         let read = |name: &str| {
             let path = wavs.join(format!("{name}.wav"));
