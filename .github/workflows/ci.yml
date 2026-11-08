@@ -46,6 +46,9 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test
+      - name: OS credential store round-trip
+        working-directory: src-tauri
+        run: cargo test secrets -- --ignored
       - name: Build app
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
       - uses: actions/upload-artifact@v4
