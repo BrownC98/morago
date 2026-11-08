@@ -190,7 +190,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setPartials({});
         }
       }),
-      onEvent("engine-error", (p) => setEngineErrors((e) => ({ ...e, [p.stage]: p.message }))),
+      onEvent("engine-error", (p) => {
+        // A notice (a setting the server ignores, skipped work) must stay readable:
+        // a toast, not the status-bar error that the next good result clears.
+        if (p.stage === "notice") notify("info", p.message);
+        else setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
+      }),
       onEvent("model-download", (p) =>
         setDownloads((d) => ({ ...d, [p.model_id]: { done: p.done_bytes, total: p.total_bytes } })),
       ),
