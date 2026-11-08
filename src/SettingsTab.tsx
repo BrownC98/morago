@@ -30,10 +30,21 @@ const THEMES: { value: ThemeSetting; label: string }[] = [
 ];
 
 function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boolean; onUse?: () => void }) {
-  const { downloads, downloadErrors, startDownload, cancelDownload } = useApp();
+  const { downloads, downloadErrors, startDownload, cancelDownload, deleteModel } = useApp();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const dl = downloads[model.id];
   const err = downloadErrors[model.id];
   const pct = dl && dl.total ? Math.min(100, Math.round((dl.done / dl.total) * 100)) : null;
+  const del = model.on_disk && (
+    <button
+      type="button"
+      className="ab ghost sm danger"
+      onClick={() => setConfirmDelete(true)}
+      aria-label={`${model.name} 파일 삭제`}
+    >
+      삭제
+    </button>
+  );
   return (
     <div className="mrow">
       <span className="n">{model.name}</span>
@@ -61,18 +72,22 @@ function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boo
         <>
           <span className="fhint">
             {model.note}
+            {model.on_disk && !model.installed && <> · 이전 형식의 파일이 있습니다. 이 파일은 쓰지 않습니다.</>}
             {err && <span className="errtext"> · {err}</span>}
           </span>
           {model.installed ? (
-            selected ? (
-              <span className="ok">사용 중</span>
-            ) : onUse ? (
-              <button type="button" className="ab sm" onClick={onUse} aria-label={`${model.name} 사용하기`}>
-                사용하기
-              </button>
-            ) : (
-              <span className="ok">내려받음</span>
-            )
+            <span className="row2">
+              {selected ? (
+                <span className="ok">사용 중</span>
+              ) : onUse ? (
+                <button type="button" className="ab sm" onClick={onUse} aria-label={`${model.name} 사용하기`}>
+                  사용하기
+                </button>
+              ) : (
+                <span className="ok">내려받음</span>
+              )}
+              {del}
+            </span>
           ) : (
             <span className="row2">
               {selected && <span className="fhint">선택됨</span>}
@@ -84,10 +99,26 @@ function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boo
               >
                 {err ? "다시 내려받기" : "내려받기"}
               </button>
+              {del}
             </span>
           )}
         </>
       )}
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`${model.name} 모델 파일을 지울까요?`}
+        body={
+          model.installed
+            ? "이 컴퓨터에서 모델 파일이 지워집니다. 다시 쓰려면 다시 내려받아야 합니다."
+            : "앱이 쓰지 않는 이전 형식의 파일입니다. 이 컴퓨터에서 지워집니다."
+        }
+        confirmLabel="지우기"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          deleteModel(model.id);
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
@@ -555,6 +586,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                 </li>
                 <li translate="no">Qwen3-ASR 0.6B (Qwen, Alibaba Cloud): Apache License 2.0</li>
                 <li translate="no">Whisper (OpenAI): MIT License</li>
+                <li translate="no">whisper.cpp, ggml (The ggml authors): MIT License</li>
                 <li>
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0
                   (https://ai.google.dev/gemma/docs/gemma_4_license). 모델 파일은 Google의 Hugging Face 저장소에서 바꾸지 않고 내려받습니다.

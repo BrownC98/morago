@@ -49,6 +49,7 @@ export interface App {
   downloadErrors: Record<string, string>;
   startDownload: (id: string) => void;
   cancelDownload: (id: string) => void;
+  deleteModel: (id: string) => void;
   mics: string[];
   systemAudio: { supported: boolean; reason: string | null } | null;
   running: boolean;
@@ -268,6 +269,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [notify],
   );
 
+  const deleteModel = useCallback(
+    (id: string) => {
+      api.deleteModel(id).then(refreshModels, (e) => notify("error", errText(e)));
+    },
+    [notify, refreshModels],
+  );
+
   const startSession = useCallback(async () => {
     setStarting(true);
     // Clear first: the core can send utterances before the command returns.
@@ -328,6 +336,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       downloadErrors,
       startDownload,
       cancelDownload,
+      deleteModel,
       mics,
       systemAudio,
       running,
@@ -360,6 +369,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       downloadErrors,
       startDownload,
       cancelDownload,
+      deleteModel,
       mics,
       systemAudio,
       running,

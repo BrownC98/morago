@@ -14,9 +14,10 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `test_provider` | `{ role }` | `{ ok: boolean, message: string }` (uses the saved settings and key) |
 | `list_mics` | – | `string[]` |
 | `system_audio_support` | – | `{ supported: boolean, reason: string \| null }` |
-| `list_models` | – | `(ModelInfo & { installed: boolean })[]` |
+| `list_models` | – | `(ModelInfo & { installed: boolean, on_disk: boolean })[]` (`on_disk`: the model folder exists, also with files that the app cannot use, for example the sherpa-onnx Whisper files of before 2026-11-09) |
 | `download_model` | `{ id }` | – (returns at once; progress by events) |
 | `cancel_download` | `{ id }` | – |
+| `delete_model` | `{ id }` | – (deletes the model folder; refused while a meeting runs or the model downloads) |
 | `start_session` | `{ title: string \| null }` | `SessionMeta` |
 | `stop_session` | – | `SessionSummary` |
 | `list_sessions` | – | `SessionSummary[]` (newest first) |

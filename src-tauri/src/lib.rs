@@ -34,6 +34,7 @@ pub fn run() {
             commands::list_models,
             commands::download_model,
             commands::cancel_download,
+            commands::delete_model,
             commands::start_session,
             commands::stop_session,
             commands::list_sessions,
