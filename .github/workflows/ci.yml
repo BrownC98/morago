@@ -108,7 +108,7 @@ jobs:
         run: cargo test secrets -- --ignored
 
   # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
-  # E2B): engine::tests::pipeline_end_to_end. Manual runs only (about 3.6 GB
+  # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*. Manual runs only (about 3.6 GB
   # of models, cached).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -145,6 +145,11 @@ jobs:
       - name: End-to-end pipeline test
         working-directory: src-tauri
         run: cargo test --lib engine::tests::pipeline_end_to_end -- --ignored --nocapture
+      - name: Local translation with context
+        working-directory: src-tauri
+        env:
+          MORAGO_TEST_MODELS_DIR: ${{ github.workspace }}/e2e/models
+        run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs.
   bundle:

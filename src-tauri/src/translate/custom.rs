@@ -194,6 +194,7 @@ impl Translator for CustomTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
+        self.history.set_target(target_language);
         // A 400 that names an optional parameter (temperature, reasoning_effort):
         // the server does not accept it. Retry once without it, at most once per
         // parameter. Any other 400 (bad model, bad request) is reported as it is.
@@ -404,6 +405,25 @@ mod tests {
                 .unwrap()
                 .contains("- one")
         );
+    }
+
+    #[test]
+    fn context_resets_on_target_change_and_new_session() {
+        let (base_url, server) = mock_server_seq(vec![
+            ("200 OK", ok_body("하나")),
+            ("200 OK", ok_body("ふた")),
+            ("200 OK", ok_body("셋")),
+        ]);
+        let mut t = translator(base_url.clone(), None);
+        t.translate("one", Some("en"), "ko").unwrap();
+        t.translate("two", Some("en"), "ja").unwrap();
+        // A new session builds a new translator.
+        let mut next = translator(base_url, None);
+        next.translate("three", Some("en"), "ko").unwrap();
+        let requests = server.join().unwrap();
+        let system = |i: usize| request_json(&requests[i])["messages"][0]["content"].clone();
+        assert!(!system(1).as_str().unwrap().contains("Earlier lines"));
+        assert!(!system(2).as_str().unwrap().contains("Earlier lines"));
     }
 
     #[test]
