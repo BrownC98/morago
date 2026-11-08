@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Gate check: the Windows + macOS CI run (.github/workflows/ci.yml) must pass.
 # No local build (human decision 2026-11-08: local builds starve the shared VM).
-# For HEAD it checks the run of HEAD; if HEAD is a local merge commit with no
-# run, it checks the run of each parent instead. Push each commit first.
+# For HEAD it checks the run of HEAD. A local merge commit without a run is
+# pushed to a temp branch gate/<sha> so CI builds the merged tree.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=BrownC98/morago
@@ -39,12 +39,25 @@ check_sha() {
 }
 
 head=$(git rev-parse HEAD)
+tree=$(git rev-parse "HEAD^{tree}")
 if [ -n "$(run_for "$head")" ]; then
   check_sha "$head"
 else
-  parents=$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)
-  [ "$(wc -w <<<"$parents")" -ge 2 ] || { check_sha "$head"; exit; }
-  echo "gate: HEAD $head is a local merge; checking its parents"
-  for p in $parents; do check_sha "$p"; done
+  # A parent's green run counts only when HEAD has the same tree (no new code).
+  same=""
+  for p in $(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-); do
+    if [ "$(git rev-parse "$p^{tree}")" = "$tree" ]; then same=$p; break; fi
+  done
+  if [ -n "$same" ]; then
+    echo "gate: HEAD $head has the tree of $same; checking that run"
+    check_sha "$same"
+  else
+    # A real merge: build the merged tree on CI from a temp branch.
+    tmp="gate/$head"
+    echo "gate: HEAD $head is not on CI; pushing temp branch $tmp"
+    git push -q origin "$head:refs/heads/$tmp"
+    trap 'git push -q origin --delete "$tmp" || true' EXIT
+    check_sha "$head"
+  fi
 fi
 echo "gate: pass"
