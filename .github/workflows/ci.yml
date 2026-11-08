@@ -149,7 +149,7 @@ jobs:
         working-directory: src-tauri
         env:
           MORAGO_TEST_MODELS_DIR: ${{ github.workspace }}/e2e/models
-        run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture
+        run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture --test-threads=1
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs.
   bundle:
