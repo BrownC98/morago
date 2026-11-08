@@ -147,12 +147,19 @@ mod tests {
                 "[{:>6}-{:>6} ms] {} lang={:?} {}",
                 seg.start_ms, seg.end_ms, who, t.language, t.text
             );
+            assert!(!t.text.trim().is_empty(), "no text at {} ms", seg.start_ms);
             langs.push(t.language.clone().unwrap_or_default());
             speakers.insert(who);
         }
         println!("ASR+diarize time: {:?}", started.elapsed());
         assert!(segs.len() >= order.len(), "VAD found too few segments");
-        for want in ["en", "ko", "ja", "zh"] {
+        // Qwen3-ASR gives no language; Latin script then stays unknown.
+        let want_langs: &[&str] = if asr_id == models::QWEN3_ASR_ID {
+            &["ko", "ja", "zh"]
+        } else {
+            &["en", "ko", "ja", "zh"]
+        };
+        for &want in want_langs {
             assert!(
                 langs.iter().any(|l| l == want),
                 "language {want} not detected: {langs:?}"
