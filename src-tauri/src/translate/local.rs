@@ -12,9 +12,6 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// Prompt tokens per decode call.
-const PROMPT_PART: usize = 32;
-
 /// llama.cpp allows one backend per process.
 fn backend() -> anyhow::Result<&'static LlamaBackend> {
     static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
@@ -67,7 +64,7 @@ impl LocalTranslator {
         })
     }
 
-    /// Stops with an error before the next token or prompt part when `stop` returns true.
+    /// Stops with an error before the next token when `stop` returns true.
     fn generate(
         &self,
         system: &str,
@@ -93,25 +90,9 @@ impl LocalTranslator {
             .with_n_threads_batch(self.threads);
         let mut ctx = self.model.new_context(backend, params)?;
 
-        // The prompt goes in parts: `stop` waits for one part, not for all of it.
-        let mut batch = LlamaBatch::new(PROMPT_PART, 1);
-        for (i, part) in prompt_tokens.chunks(PROMPT_PART).enumerate() {
-            if stop() {
-                return Err(anyhow!("stopped"));
-            }
-            batch.clear();
-            let start = i * PROMPT_PART;
-            for (j, &token) in part.iter().enumerate() {
-                let pos = start + j;
-                batch.add(
-                    token,
-                    i32::try_from(pos)?,
-                    &[0],
-                    pos + 1 == prompt_tokens.len(),
-                )?;
-            }
-            ctx.decode(&mut batch)?;
-        }
+        let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
+        batch.add_sequence(&prompt_tokens, 0, false)?;
+        ctx.decode(&mut batch)?;
 
         let mut sampler = LlamaSampler::greedy();
         let mut bytes = Vec::new();
