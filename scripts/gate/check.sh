@@ -7,10 +7,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=BrownC98/morago
 TIMEOUT=${CI_WAIT_TIMEOUT:-3600}
-# Jobs that must pass: "check" on both OSes. Installers ("bundle") build
-# only at release (tags v*, manual runs), not in the gate.
-NEED="check"
-
+# Pass rule: no job failed or was cancelled, and "check" passed on Windows and
+# macOS. CI skips "check" only when the commit changes no Rust or CI file
+# since master (job "changes"). Installers ("bundle") are not part of the gate.
 run_for() { # prints the newest ci.yml run id for a commit, or nothing
   gh run list -R "$REPO" --workflow ci.yml --commit "$1" -L 1 \
     --json databaseId -q '.[0].databaseId // empty'
@@ -32,14 +31,14 @@ check_sha() {
     echo "gate: CI run $id failed or timed out" >&2
     return 1
   }
-  local job ok
-  for job in $NEED; do
-    ok=$(gh run view -R "$REPO" "$id" --json jobs -q "[.jobs[] | select(.conclusion == \"success\" and (.name | startswith(\"$job \")) and (.name | test(\"windows|macos\")))] | length")
-    if [ "$ok" -lt 2 ]; then
-      echo "gate: run $id lacks a successful '$job' job on Windows and macOS" >&2
-      return 1
-    fi
-  done
+  local bad ok skipped
+  bad=$(gh run view -R "$REPO" "$id" --json jobs -q '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped")] | length')
+  ok=$(gh run view -R "$REPO" "$id" --json jobs -q '[.jobs[] | select(.conclusion == "success" and (.name | startswith("check (")) and (.name | test("windows|macos")))] | length')
+  skipped=$(gh run view -R "$REPO" "$id" --json jobs -q '[.jobs[] | select(.conclusion == "skipped" and (.name | startswith("check")))] | length')
+  if [ "$bad" -ne 0 ] || { [ "$ok" -lt 2 ] && [ "$skipped" -eq 0 ]; }; then
+    echo "gate: run $id: $bad failed jobs, $ok of 2 'check' jobs passed" >&2
+    return 1
+  fi
 }
 
 head=$(git rev-parse HEAD)
