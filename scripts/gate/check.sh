@@ -10,8 +10,8 @@ TIMEOUT=${CI_WAIT_TIMEOUT:-3600}
 # Pass rule: no job failed or was cancelled, and "check" passed on Windows and
 # macOS. CI skips "check" only when the commit changes no Rust or CI file
 # since master (job "changes"). Installers ("bundle") are not part of the gate.
-run_for() { # prints the newest ci.yml run id for a commit, or nothing
-  gh run list -R "$REPO" --workflow ci.yml --commit "$1" -L 1 \
+run_for() { # prints the newest ci.yml push run id for a commit, or nothing (manual runs are not the gate)
+  gh run list -R "$REPO" --workflow ci.yml --event push --commit "$1" -L 1 \
     --json databaseId -q '.[0].databaseId // empty'
 }
 
