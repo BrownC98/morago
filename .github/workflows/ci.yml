@@ -101,7 +101,6 @@ jobs:
             *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
           esac
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
-          echo "SHERPA_ONNX_ARCHIVE_DIR=$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/sherpa-onnx
@@ -109,14 +108,20 @@ jobs:
       - name: sherpa-onnx prebuilt archive (download)
         shell: bash
         run: |
-          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR"; cd "$SHERPA_ONNX_ARCHIVE_DIR"
+          # On a GitHub releases outage (504, 2026-11-08) keep going: the build
+          # script reuses the unpacked archive in the restored Rust cache.
+          d="$RUNNER_TEMP/sherpa-onnx"; mkdir -p "$d"; cd "$d"
           f=${{ steps.sherpa.outputs.file }}
-          [ -s "$f" ] || curl -fsSL --retry 5 --retry-all-errors -o "$f" \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f"
+          [ -s "$f" ] || { curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$f.part" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f" \
+            && mv "$f.part" "$f"; } || rm -f "$f.part"
+          if [ -s "$f" ]; then echo "SHERPA_ONNX_ARCHIVE_DIR=$d" >> "$GITHUB_ENV"; else echo "::warning::sherpa-onnx archive download failed"; fi
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: check
+          # The unpacked sherpa-onnx libs live outside target/debug.
+          cache-directories: src-tauri/target/sherpa-onnx-prebuilt
           # Only the integration branch and master save; work branches restore.
           save-if: ${{ github.ref_name == '회의번역앱' || github.ref_name == 'master' }}
       - name: Rust lint
@@ -166,7 +171,6 @@ jobs:
             *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
           esac
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
-          echo "SHERPA_ONNX_ARCHIVE_DIR=$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/sherpa-onnx
@@ -174,10 +178,14 @@ jobs:
       - name: sherpa-onnx prebuilt archive (download)
         shell: bash
         run: |
-          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR"; cd "$SHERPA_ONNX_ARCHIVE_DIR"
+          # On a GitHub releases outage (504, 2026-11-08) keep going: the build
+          # script reuses the unpacked archive in the restored Rust cache.
+          d="$RUNNER_TEMP/sherpa-onnx"; mkdir -p "$d"; cd "$d"
           f=${{ steps.sherpa.outputs.file }}
-          [ -s "$f" ] || curl -fsSL --retry 5 --retry-all-errors -o "$f" \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f"
+          [ -s "$f" ] || { curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$f.part" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f" \
+            && mv "$f.part" "$f"; } || rm -f "$f.part"
+          if [ -s "$f" ]; then echo "SHERPA_ONNX_ARCHIVE_DIR=$d" >> "$GITHUB_ENV"; else echo "::warning::sherpa-onnx archive download failed"; fi
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
