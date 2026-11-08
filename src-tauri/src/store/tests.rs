@@ -11,7 +11,7 @@ fn meta(id: &str, started_at: &str) -> SessionMeta {
         ended_at: None,
         target_language: "ko".into(),
         asr_label: "Local Whisper small".into(),
-        translator_label: "Local Qwen2.5 3B".into(),
+        translator_label: "Local Gemma 4 E2B".into(),
         speaker_names: BTreeMap::new(),
     }
 }
@@ -310,7 +310,7 @@ fn export_markdown_golden() {
         "- 원문 언어: en, ko\n",
         "- 번역 언어: ko\n",
         "- 음성 인식: Local Whisper small\n",
-        "- 번역: Local Qwen2.5 3B\n",
+        "- 번역: Local Gemma 4 E2B\n",
         "\n",
         "**화자 1** · 00:01:23–00:01:31  \n",
         "Hello everyone.\n",
@@ -388,7 +388,7 @@ fn export_escapes_markdown_and_keeps_speaker_names_on_one_line() {
     w.finish("2026-11-08T15:00:00+09:00").unwrap();
 
     let text = store.export(ID, ExportFormat::Markdown).unwrap();
-    let body = text.split_once("- 번역: Local Qwen2.5 3B\n").unwrap().1;
+    let body = text.split_once("- 번역: Local Gemma 4 E2B\n").unwrap().1;
     assert!(text.starts_with("# \\*초안\\* 회의\n"), "{text}");
     let expected = concat!(
         "\n",

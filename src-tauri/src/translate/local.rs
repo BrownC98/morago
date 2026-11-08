@@ -1,12 +1,12 @@
 //! Local translation with an embedded llama.cpp model.
 
 use super::{History, Translator, clean_output, system_prompt};
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -54,22 +54,14 @@ impl LocalTranslator {
             (std::thread::available_parallelism().map_or(4, |n| n.get()) / 2).clamp(2, 8) as i32;
         Ok(Self {
             model,
-            label: format!("로컬 {}", display_name(model_id)),
+            label: format!("로컬 {}", crate::models::display_name(model_id)),
             threads,
         })
     }
 
     fn generate(&self, system: &str, text: &str) -> anyhow::Result<String> {
         let backend = backend()?;
-        let template = self
-            .model
-            .chat_template(None)
-            .context("모델에 채팅 템플릿이 없습니다")?;
-        let messages = vec![
-            LlamaChatMessage::new("system".into(), system.into())?,
-            LlamaChatMessage::new("user".into(), text.into())?,
-        ];
-        let prompt = self.model.apply_chat_template(&template, &messages, true)?;
+        let prompt = gemma4_prompt(system, text);
         let vocab = self.model.vocab();
         let prompt_tokens = vocab.tokenize(prompt.as_bytes(), true, true);
         let text_tokens = vocab.tokenize(text.as_bytes(), false, false).len();
@@ -128,29 +120,15 @@ impl Translator for LocalTranslator {
     }
 }
 
-/// "qwen2.5-3b-instruct-q4" -> "Qwen2.5 3B".
-fn display_name(model_id: &str) -> String {
-    let parts: Vec<String> = model_id
-        .split('-')
-        .take_while(|p| !p.eq_ignore_ascii_case("instruct") && !p.eq_ignore_ascii_case("chat"))
-        .map(|p| {
-            let is_size = p.len() > 1
-                && p.ends_with(['b', 'B'])
-                && p[..p.len() - 1]
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c == '.');
-            if is_size {
-                p.to_ascii_uppercase()
-            } else {
-                let mut chars = p.chars();
-                chars
-                    .next()
-                    .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
-                    .unwrap_or_default()
-            }
-        })
-        .collect();
-    parts.join(" ")
+/// Gemma 4 chat format, thinking off (from the model's chat_template.jinja,
+/// 2026-07-09). llama.cpp's legacy template function does not know Gemma 4.
+/// No `<bos>`: tokenizing with `add_bos` adds it.
+fn gemma4_prompt(system: &str, user: &str) -> String {
+    format!(
+        "<|turn>system\n{}<turn|>\n<|turn>user\n{}<turn|>\n<|turn>model\n",
+        system.trim(),
+        user.trim()
+    )
 }
 
 #[cfg(test)]
@@ -159,46 +137,33 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn labels_from_model_ids() {
-        assert_eq!(display_name("qwen2.5-3b-instruct-q4"), "Qwen2.5 3B");
-        assert_eq!(display_name("qwen2.5-1.5b-instruct-q4"), "Qwen2.5 1.5B");
+    fn gemma4_prompt_format() {
+        assert_eq!(
+            gemma4_prompt(" sys ", "hi\n"),
+            "<|turn>system\nsys<turn|>\n<|turn>user\nhi<turn|>\n<|turn>model\n"
+        );
     }
 
     #[test]
     fn missing_model_gives_korean_error() {
         let dir = std::env::temp_dir().join("morago-no-such-models");
-        let err = LocalTranslator::load(&dir, "qwen2.5-3b-instruct-q4")
+        let err = LocalTranslator::load(&dir, "gemma-4-e2b-it-q4")
             .err()
             .unwrap()
             .to_string();
         assert!(err.contains("설치되지 않았습니다"), "{err}");
     }
 
-    const MODEL_ID: &str = "qwen2.5-1.5b-instruct-q4";
-    const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
+    const MODEL_ID: &str = "gemma-4-e2b-it-q4";
 
-    /// Downloads the 1.5B model into `MORAGO_TEST_MODELS_DIR` (default: a temp dir).
+    /// Downloads the model into `MORAGO_TEST_MODELS_DIR` (default: a temp dir).
     fn ensure_model() -> std::path::PathBuf {
         let dir = std::env::var_os("MORAGO_TEST_MODELS_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("morago-translate-test"));
-        let file = dir.join(MODEL_ID).join("model.gguf");
-        if !file.is_file() {
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            let client = reqwest::blocking::Client::builder()
-                .timeout(None)
-                .build()
-                .unwrap();
-            let mut response = client
-                .get(MODEL_URL)
-                .send()
-                .unwrap()
-                .error_for_status()
-                .unwrap();
-            let part = file.with_extension("part");
-            let mut out = std::fs::File::create(&part).unwrap();
-            response.copy_to(&mut out).unwrap();
-            std::fs::rename(&part, &file).unwrap();
+        if !crate::models::is_installed(&dir, MODEL_ID) {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            crate::models::download(&dir, MODEL_ID, &|_| {}, &cancel).unwrap();
         }
         dir
     }
@@ -206,7 +171,7 @@ mod tests {
     /// Run: `LLAMA_LIB_PROFILE=Release cargo test local_model -- --ignored --nocapture`
     /// (a debug build of llama.cpp is about 10x slower).
     #[test]
-    #[ignore = "downloads a 1 GB model and runs it on the CPU"]
+    #[ignore = "downloads a 3.3 GB model and runs it on the CPU"]
     fn local_model_translates() {
         let dir = ensure_model();
         let model_started = Instant::now();

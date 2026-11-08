@@ -22,7 +22,7 @@ pub enum ModelKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelInfo {
-    /// Stable id, for example "whisper-small", "qwen2.5-3b-instruct-q4".
+    /// Stable id, for example "whisper-small", "gemma-4-e2b-it-q4".
     pub id: String,
     pub kind: ModelKind,
     /// Display name, for example "Whisper small".
@@ -209,30 +209,32 @@ const SPECS: &[Spec] = &[
             "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547"
         ),
     },
+    // Gemma 4, Apache-2.0, official Google GGUF repos (not gated). Facts:
+    // research-gemma.md of the coordinator task (2026-11-08).
     Spec {
-        id: "qwen2.5-3b-instruct-q4",
+        id: "gemma-4-e2b-it-q4",
         kind: ModelKind::Translation,
-        name: "Qwen2.5 3B Instruct",
-        note: "번역 품질 좋음, 메모리 약 3GB (기본)",
+        name: "Gemma 4 E2B",
+        note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)",
         files: &[FileSpec {
-            urls: hf!("Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"),
+            urls: hf!("google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf"),
             name: LLM_FILE,
-            size: 2_104_932_768,
-            sha256: "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+            size: 3_349_516_256,
+            sha256: "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
         }],
     },
     Spec {
-        id: "qwen2.5-1.5b-instruct-q4",
+        id: "gemma-4-12b-it-q4",
         kind: ModelKind::Translation,
-        name: "Qwen2.5 1.5B Instruct",
-        note: "번역 품질 보통, 빠름, 메모리 약 1.5GB (저사양 PC)",
+        name: "Gemma 4 12B",
+        note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)",
         files: &[FileSpec {
             urls: hf!(
-                "Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+                "google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf"
             ),
             name: LLM_FILE,
-            size: 1_117_320_736,
-            sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+            size: 6_975_879_296,
+            sha256: "93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b",
         }],
     },
 ];
@@ -245,6 +247,14 @@ fn info(spec: &Spec) -> ModelInfo {
         size_bytes: spec.files.iter().map(|f| f.size).sum(),
         note: spec.note.into(),
     }
+}
+
+/// Display name of a catalog model ("Gemma 4 E2B"); the id if unknown.
+pub fn display_name(id: &str) -> String {
+    SPECS
+        .iter()
+        .find(|s| s.id == id)
+        .map_or_else(|| id.to_string(), |s| s.name.to_string())
 }
 
 /// All models that the app can download.
@@ -475,8 +485,8 @@ mod tests {
             "whisper-base",
             "whisper-small",
             "whisper-medium",
-            "qwen2.5-3b-instruct-q4",
-            "qwen2.5-1.5b-instruct-q4",
+            "gemma-4-e2b-it-q4",
+            "gemma-4-12b-it-q4",
         ] {
             assert!(cat.iter().any(|m| m.id == id), "missing {id}");
         }

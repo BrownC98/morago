@@ -461,7 +461,7 @@ mod tests {
     fn pipeline_end_to_end() {
         use crate::settings::{AsrConfig, TranslateConfig};
         let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
-        let ids = ["whisper-base", "qwen2.5-1.5b-instruct-q4"];
+        let ids = ["whisper-base", "gemma-4-e2b-it-q4"];
         let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
         for id in ids {
             if !models::is_installed(&models_dir, id) {
@@ -482,7 +482,7 @@ mod tests {
                 model_id: "whisper-base".into(),
             },
             translate: TranslateConfig::Local {
-                model_id: "qwen2.5-1.5b-instruct-q4".into(),
+                model_id: "gemma-4-e2b-it-q4".into(),
             },
             ..Settings::default()
         };

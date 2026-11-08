@@ -36,8 +36,8 @@ const models: ModelInfo[] = [
   { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 150 * MB, note: "빠름, 정확도 보통", installed: true },
   { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 480 * MB, note: "대부분의 노트북에 맞음", installed: !flags.has("nomodel") },
   { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 1.5 * 1024 * MB, note: "정확도 높음, 느린 컴퓨터는 지연됨", installed: false },
-  { id: "qwen2.5-3b-instruct-q4", kind: "translation", name: "Qwen2.5 3B", size_bytes: 2 * 1024 * MB, note: "가볍고 빠름", installed: true },
-  { id: "qwen2.5-7b-instruct-q4", kind: "translation", name: "Qwen2.5 7B", size_bytes: 4.7 * 1024 * MB, note: "번역 품질 높음, 메모리 8GB 이상", installed: false },
+  { id: "gemma-4-e2b-it-q4", kind: "translation", name: "Gemma 4 E2B", size_bytes: 3.1 * 1024 * MB, note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)", installed: true },
+  { id: "gemma-4-12b-it-q4", kind: "translation", name: "Gemma 4 12B", size_bytes: 6.5 * 1024 * MB, note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)", installed: false },
 ];
 
 const keys = new Map<string, string>();
@@ -103,7 +103,7 @@ function addSession(id: string, title: string, started: string, minutesLong: num
       ended_at: end.toISOString(),
       target_language: "ko",
       asr_label: "로컬 Whisper small",
-      translator_label: "로컬 Qwen2.5 3B",
+      translator_label: "로컬 Gemma 4 E2B",
       speaker_names: names,
     },
     utterances,
@@ -141,7 +141,7 @@ function startRun(): SessionMeta {
     ended_at: null,
     target_language: settings.target_language,
     asr_label: settings.asr.kind === "local" ? "로컬 Whisper small" : `사용자 지정 ${settings.asr.endpoint.model}`,
-    translator_label: settings.translate.kind === "local" ? "로컬 Qwen2.5 3B" : `사용자 지정 ${settings.translate.endpoint.model}`,
+    translator_label: settings.translate.kind === "local" ? "로컬 Gemma 4 E2B" : `사용자 지정 ${settings.translate.endpoint.model}`,
     speaker_names: {},
   };
   run = { id, startedAt: now.getTime(), timers: [], utterances: [], meta };

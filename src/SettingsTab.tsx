@@ -487,10 +487,14 @@ export function SettingsTab({ active }: { active: boolean }) {
           <section className="grp" id="set-about" aria-labelledby="h-about">
             <h2 id="h-about">정보</h2>
             <div className="card">
-              <span className="fhint">앱에 들어 있는 모델과 라이선스</span>
+              <span className="fhint">모델과 라이선스</span>
               <ul className="notice-list">
                 <li translate="no">Silero VAD: MIT License, Copyright (c) 2020-present Silero Team</li>
                 <li translate="no">CAM++ speaker embedding (3D-Speaker): Apache License 2.0</li>
+                <li>
+                  로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0
+                  (https://ai.google.dev/gemma/docs/gemma_4_license). 모델 파일은 Google의 Hugging Face 저장소에서 바꾸지 않고 내려받습니다.
+                </li>
               </ul>
             </div>
           </section>

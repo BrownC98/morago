@@ -21,7 +21,7 @@ pub trait Translator: Send {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String>;
-    /// Label for the UI and session meta, for example "로컬 Qwen2.5 3B".
+    /// Label for the UI and session meta, for example "로컬 Gemma 4 E2B".
     fn label(&self) -> String;
 }
 
@@ -136,6 +136,11 @@ pub(crate) fn clean_output(raw: &str, source_text: &str) -> String {
     let mut s = raw.trim();
     if let Some(end) = s.rfind("</think>") {
         s = s[end + "</think>".len()..].trim();
+    }
+    // Gemma 4 12B writes an empty thought block before the answer; with
+    // control tokens hidden it shows as a leading "thought" line.
+    if let Some(rest) = s.strip_prefix("thought\n") {
+        s = rest.trim();
     }
     const PREFIXES: [&str; 6] = [
         "translation:",

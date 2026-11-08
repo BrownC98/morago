@@ -60,7 +60,7 @@ impl Default for Settings {
                 model_id: "whisper-small".into(),
             },
             translate: TranslateConfig::Local {
-                model_id: "qwen2.5-3b-instruct-q4".into(),
+                model_id: "gemma-4-e2b-it-q4".into(),
             },
             diarize: true,
             capture_mic: true,
