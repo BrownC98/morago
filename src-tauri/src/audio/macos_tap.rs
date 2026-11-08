@@ -16,7 +16,8 @@ use objc2::{AnyThread, rc::Retained};
 use objc2_core_audio::{
     AudioConvertHostTimeToNanos, AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID,
     AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop, AudioGetCurrentHostTime,
-    AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice,
+    AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
+    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
     AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectID,
     AudioObjectPropertyAddress, AudioObjectRemovePropertyListener, CATapDescription,
     CATapMuteBehavior, kAudioAggregateDeviceNameKey, kAudioAggregateDeviceTapAutoStartKey,
@@ -51,24 +52,6 @@ const FLAG_FLOAT: u32 = 1;
 /// Buffers of one IOProc call that are mixed. A tap has one or two.
 const MAX_BUFFERS: usize = 8;
 
-/// `AudioHardwareCreateProcessTap` and `AudioHardwareDestroyProcessTap` exist from macOS 14.2.
-/// They are looked up at run time, after the version check, so this code adds no import of
-/// them and an app that supports macOS 13 still starts there.
-type CreateTap =
-    unsafe extern "C-unwind" fn(Option<&CATapDescription>, *mut AudioObjectID) -> OSStatus;
-type DestroyTap = unsafe extern "C-unwind" fn(AudioObjectID) -> OSStatus;
-
-fn load<T: Copy>(name: &CStr) -> Option<T> {
-    assert_eq!(size_of::<T>(), size_of::<*mut c_void>());
-    // SAFETY: `name` is a valid C string; `dlsym` only reads it.
-    let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-    if symbol.is_null() {
-        return None;
-    }
-    // SAFETY: `T` is a function pointer type of the same size, and the symbol has that signature.
-    Some(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&symbol) })
-}
-
 /// What the IOProc needs. Lives in a `Box` that `TapStream` frees after the IOProc is gone.
 struct IoContext {
     feeder: Feeder,
@@ -84,7 +67,6 @@ struct ListenerContext {
 /// A running tap. Dropping it stops the IOProc and destroys the aggregate device and the tap.
 pub struct TapStream {
     tap_id: AudioObjectID,
-    destroy_tap: DestroyTap,
     aggregate_id: Option<AudioObjectID>,
     proc_id: AudioDeviceIOProcID,
     started: bool,
@@ -136,7 +118,7 @@ impl Drop for TapStream {
                 }
                 let _ = AudioHardwareDestroyAggregateDevice(aggregate);
             }
-            let _ = (self.destroy_tap)(self.tap_id);
+            let _ = AudioHardwareDestroyProcessTap(self.tap_id);
             if !self.context.is_null() {
                 drop(Box::from_raw(self.context));
             }
@@ -154,13 +136,6 @@ const LISTENED: [u32; 2] = [
 ];
 
 pub fn open(feeder: Feeder, events: Sender<Event>, generation: u64) -> anyhow::Result<TapStream> {
-    let (create_tap, destroy_tap) = match (
-        load::<CreateTap>(c"AudioHardwareCreateProcessTap"),
-        load::<DestroyTap>(c"AudioHardwareDestroyProcessTap"),
-    ) {
-        (Some(c), Some(d)) => (c, d),
-        _ => anyhow::bail!("{}", super::MACOS_LOOPBACK_REASON),
-    };
     let output_device = default_output_device()?;
     let uid = device_uid(output_device)?;
     let pid = std::process::id();
@@ -184,14 +159,14 @@ pub fn open(feeder: Feeder, events: Sender<Event>, generation: u64) -> anyhow::R
         tap_desc.setExclusive(true); // the (empty) process list is the exclusion list
     }
     let mut tap_id: MaybeUninit<AudioObjectID> = MaybeUninit::uninit();
-    let status = unsafe { create_tap(Some(tap_desc.as_ref()), tap_id.as_mut_ptr()) };
+    let status =
+        unsafe { AudioHardwareCreateProcessTap(Some(tap_desc.as_ref()), tap_id.as_mut_ptr()) };
     check(status, "process tap")?;
     let tap_id = unsafe { tap_id.assume_init() };
 
     // From here on, `stream` destroys what exists if a later step fails.
     let mut stream = TapStream {
         tap_id,
-        destroy_tap,
         aggregate_id: None,
         proc_id: None,
         started: false,
@@ -545,29 +520,5 @@ fn aggregate_properties(
             &*NSNumber::initWithBool(NSNumber::alloc(), true) as *const _ as *const c_void,
         );
         CFRetained::cast_unchecked::<CFDictionary>(dict)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn no_strong_import_of_process_tap_symbols() {
-        let exe = std::env::current_exe().expect("test binary path");
-        let out = std::process::Command::new("nm")
-            .arg("-m")
-            .arg(&exe)
-            .output()
-            .unwrap();
-        let text = String::from_utf8_lossy(&out.stdout);
-        let sel: Vec<&str> = text
-            .lines()
-            .filter(|l| {
-                l.contains("AudioHardware")
-                    || l.contains("AudioObjectGetPropertyData")
-                    || l.contains("ProcessTap")
-            })
-            .take(40)
-            .collect();
-        panic!("DIAGNOSTIC {sel:#?}");
     }
 }

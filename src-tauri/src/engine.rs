@@ -116,28 +116,23 @@ fn rms(samples: &[f32]) -> f32 {
     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
 }
 
-/// Starts a session. Blocking: loads models. Call from a blocking thread.
-pub fn start(
+/// The parts of a running session before capture starts.
+struct Pipeline {
+    meta: SessionMeta,
+    target_language: Arc<RwLock<String>>,
+    audio_tx: Sender<AudioChunk>,
+    threads: Vec<JoinHandle<()>>,
+    writer: Arc<Mutex<Option<SessionWriter>>>,
+}
+
+/// Loads the models, creates the session file and starts the stage threads.
+fn start_pipeline(
     settings: &Settings,
     title: Option<String>,
     models_dir: &Path,
     store: &SessionStore,
-    sink: Arc<dyn Sink>,
-) -> anyhow::Result<Running> {
-    if !settings.capture_mic && !settings.capture_system {
-        anyhow::bail!("마이크와 시스템 소리가 모두 꺼져 있습니다. 하나 이상 켜십시오.");
-    }
-    let missing: Vec<String> = required_models(settings)
-        .into_iter()
-        .filter(|id| !models::is_installed(models_dir, id))
-        .collect();
-    if !missing.is_empty() {
-        anyhow::bail!(
-            "모델을 먼저 내려받아야 합니다: {}. 설정에서 내려받으십시오.",
-            missing.join(", ")
-        );
-    }
-
+    sink: &Arc<dyn Sink>,
+) -> anyhow::Result<Pipeline> {
     let asr = speech::build_asr(&settings.asr, models_dir)?;
     let translator = translate::build_translator(&settings.translate, models_dir)?;
     let diarizer = if settings.diarize {
@@ -172,13 +167,13 @@ pub fn start(
 
     let mut threads = Vec::new();
     {
-        let sink = sink.clone();
+        let sink = Arc::clone(sink);
         threads.push(std::thread::spawn(move || {
             vad_loop(audio_rx, vads, seg_tx, sink)
         }));
     }
     {
-        let sink = sink.clone();
+        let sink = Arc::clone(sink);
         let writer = writer.clone();
         let target = target_language.clone();
         threads.push(std::thread::spawn(move || {
@@ -186,13 +181,52 @@ pub fn start(
         }));
     }
     {
-        let sink = sink.clone();
+        let sink = Arc::clone(sink);
         let writer = writer.clone();
         let target = target_language.clone();
         threads.push(std::thread::spawn(move || {
             translate_loop(tr_rx, translator, writer, target, sink)
         }));
     }
+
+    Ok(Pipeline {
+        meta,
+        target_language,
+        audio_tx,
+        threads,
+        writer,
+    })
+}
+
+/// Starts a session. Blocking: loads models. Call from a blocking thread.
+pub fn start(
+    settings: &Settings,
+    title: Option<String>,
+    models_dir: &Path,
+    store: &SessionStore,
+    sink: Arc<dyn Sink>,
+) -> anyhow::Result<Running> {
+    if !settings.capture_mic && !settings.capture_system {
+        anyhow::bail!("마이크와 시스템 소리가 모두 꺼져 있습니다. 하나 이상 켜십시오.");
+    }
+    let missing: Vec<String> = required_models(settings)
+        .into_iter()
+        .filter(|id| !models::is_installed(models_dir, id))
+        .collect();
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "모델을 먼저 내려받아야 합니다: {}. 설정에서 내려받으십시오.",
+            missing.join(", ")
+        );
+    }
+
+    let Pipeline {
+        meta,
+        target_language,
+        audio_tx,
+        threads,
+        writer,
+    } = start_pipeline(settings, title, models_dir, store, &sink)?;
 
     let t0 = Instant::now();
     let mut captures = Vec::new();
@@ -383,6 +417,7 @@ fn translate_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn session_id_has_store_format() {
@@ -400,5 +435,134 @@ mod tests {
     fn rms_of_constant_signal() {
         assert_eq!(rms(&[]), 0.0);
         assert!((rms(&[0.5, -0.5, 0.5, -0.5]) - 0.5).abs() < 1e-6);
+    }
+
+    /// Records engine output for tests.
+    #[derive(Default)]
+    struct Recorder {
+        utterances: Mutex<Vec<Utterance>>,
+        errors: Mutex<Vec<String>>,
+    }
+
+    impl Sink for Recorder {
+        fn utterance(&self, u: &Utterance) {
+            self.utterances.lock().unwrap().push(u.clone());
+        }
+        fn level(&self, _: SourceKind, _: f32) {}
+        fn error(&self, stage: &str, _: Option<SourceKind>, message: &str) {
+            self.errors
+                .lock()
+                .unwrap()
+                .push(format!("{stage}: {message}"));
+        }
+    }
+
+    /// End to end without audio devices: speech clips go into the pipeline as
+    /// 100 ms chunks of two sources, then the saved session is read back.
+    /// Run: MORAGO_TEST_MODELS=<dir with silero-vad, speaker-campplus,
+    /// whisper-base, qwen2.5-1.5b-instruct-q4> MORAGO_TEST_WAVS=<dir with
+    /// en0.wav, sv_ko.wav, sv_ja.wav> cargo test --release engine -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn pipeline_end_to_end() {
+        use crate::settings::{AsrConfig, TranslateConfig};
+        let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
+        let wavs = PathBuf::from(std::env::var("MORAGO_TEST_WAVS").unwrap());
+        let read = |name: &str| {
+            let path = wavs.join(format!("{name}.wav"));
+            sherpa_onnx::Wave::read(path.to_str().unwrap())
+                .unwrap()
+                .samples()
+                .to_vec()
+        };
+        let settings = Settings {
+            asr: AsrConfig::Local {
+                model_id: "whisper-base".into(),
+            },
+            translate: TranslateConfig::Local {
+                model_id: "qwen2.5-1.5b-instruct-q4".into(),
+            },
+            ..Settings::default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn Sink> = recorder.clone();
+        let p = start_pipeline(&settings, Some("e2e".into()), &models_dir, &store, &sink).unwrap();
+
+        // System: English, then Japanese. Mic: Korean in the gap between them.
+        let silence = vec![0.0f32; 16_000];
+        let mut system = silence.clone();
+        system.extend(read("en0"));
+        system.extend(vec![0.0f32; 16_000 * 6]);
+        system.extend(read("sv_ja"));
+        system.extend(&silence);
+        let mut mic = vec![0.0f32; 16_000 * 9];
+        mic.extend(read("sv_ko"));
+        mic.extend(vec![0.0f32; system.len().saturating_sub(mic.len())]);
+        for (i, (s, m)) in system.chunks(1600).zip(mic.chunks(1600)).enumerate() {
+            let start_ms = i as u64 * 100;
+            for (source, samples) in [(SourceKind::System, s), (SourceKind::Mic, m)] {
+                p.audio_tx
+                    .send(AudioChunk {
+                        source,
+                        start_ms,
+                        samples: samples.to_vec(),
+                    })
+                    .unwrap();
+            }
+        }
+        let running = Running {
+            meta: p.meta.clone(),
+            target_language: p.target_language,
+            captures: Vec::new(),
+            audio_tx: Some(p.audio_tx),
+            threads: p.threads,
+            writer: p.writer,
+            store_root: root.path().to_path_buf(),
+        };
+        let summary = stop(running).unwrap();
+        let (meta, utterances) = store.load(&p.meta.id).unwrap();
+        for u in &utterances {
+            println!(
+                "{:>6}-{:>6} ms {:?} {} {:?}: {} => {:?}",
+                u.start_ms, u.end_ms, u.source, u.speaker, u.language, u.original, u.translation
+            );
+        }
+        println!(
+            "{}",
+            store
+                .export(&meta.id, crate::types::ExportFormat::Markdown)
+                .unwrap()
+        );
+        println!("errors: {:?}", recorder.errors.lock().unwrap());
+        assert!(recorder.errors.lock().unwrap().is_empty());
+        assert!(summary.utterance_count >= 3, "{summary:?}");
+        let lang = |l: &str| {
+            utterances
+                .iter()
+                .find(|u| u.language.as_deref() == Some(l))
+                .unwrap()
+        };
+        assert!(matches!(
+            lang("en").translation,
+            TranslationState::Done { .. }
+        ));
+        assert!(matches!(
+            lang("ja").translation,
+            TranslationState::Done { .. }
+        ));
+        assert_eq!(lang("ko").translation, TranslationState::SameLanguage);
+        assert_eq!(lang("ko").source, SourceKind::Mic);
+        assert!(
+            lang("en").start_ms < lang("ko").start_ms && lang("ko").start_ms < lang("ja").start_ms
+        );
+        assert_ne!(lang("en").speaker, lang("ko").speaker);
+        // Every UI event of an utterance ends in its stored state.
+        let events = recorder.utterances.lock().unwrap();
+        for u in &utterances {
+            let last = events.iter().rev().find(|e| e.id == u.id).unwrap();
+            assert_eq!(last, u);
+        }
     }
 }
