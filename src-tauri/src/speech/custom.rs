@@ -11,10 +11,16 @@ pub struct CustomAsr {
     url: String,
     model: String,
     key: Option<Secret>,
+    /// Meeting language (ISO 639-1): sent as `language`; `None` = server detects.
+    language: Option<String>,
 }
 
 impl CustomAsr {
-    pub fn new(endpoint: &Endpoint, key: Option<Secret>) -> anyhow::Result<Self> {
+    pub fn new(
+        endpoint: &Endpoint,
+        key: Option<Secret>,
+        language: Option<&str>,
+    ) -> anyhow::Result<Self> {
         let base = endpoint.base_url.trim().trim_end_matches('/');
         if base.is_empty() || !(base.starts_with("http://") || base.starts_with("https://")) {
             bail!(
@@ -31,6 +37,7 @@ impl CustomAsr {
             url: format!("{base}/audio/transcriptions"),
             model: endpoint.model.clone(),
             key,
+            language: language.map(str::to_string),
         })
     }
 
@@ -42,10 +49,13 @@ impl CustomAsr {
         let part = reqwest::blocking::multipart::Part::bytes(wav.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")?;
-        let form = reqwest::blocking::multipart::Form::new()
+        let mut form = reqwest::blocking::multipart::Form::new()
             .part("file", part)
             .text("model", self.model.clone())
             .text("response_format", response_format.to_string());
+        if let Some(language) = &self.language {
+            form = form.text("language", language.clone());
+        }
         let mut req = self.client.post(&self.url).multipart(form);
         if let Some(key) = &self.key {
             req = req.bearer_auth(key.expose());
@@ -76,7 +86,9 @@ impl Asr for CustomAsr {
         }
         let body = resp.text().context("ASR 서버 응답을 읽지 못했습니다")?;
         let mut t = parse_response(&body)?;
-        if !verbose {
+        if self.language.is_some() {
+            t.language = self.language.clone();
+        } else if !verbose {
             t.language = None;
         }
         Ok(t)
@@ -342,6 +354,7 @@ mod tests {
         let mut asr = CustomAsr::new(
             &endpoint(url + "/"),
             Some(Secret::new("sk-test-123".into())),
+            None,
         )
         .unwrap();
         let t = asr.transcribe(&segment()).unwrap();
@@ -358,12 +371,23 @@ mod tests {
         assert!(contains(&req.body, "name=\"model\""));
         assert!(contains(&req.body, "whisper-1"));
         assert!(contains(&req.body, "verbose_json"));
+        assert!(!contains(&req.body, "name=\"language\""));
+    }
+
+    #[test]
+    fn a_meeting_language_is_sent_and_returned() {
+        let (url, rx) = mock(vec![(200, r#"{"text":"はい","language":"korean"}"#)]);
+        let mut asr = CustomAsr::new(&endpoint(url), None, Some("ja")).unwrap();
+        let t = asr.transcribe(&segment()).unwrap();
+        assert_eq!(t.language.as_deref(), Some("ja"));
+        let body = rx.recv().unwrap().body;
+        assert!(contains(&body, "name=\"language\"\r\n\r\nja\r\n"));
     }
 
     #[test]
     fn no_key_means_no_authorization_header() {
         let (url, rx) = mock(vec![(200, r#"{"text":"x"}"#)]);
-        let mut asr = CustomAsr::new(&endpoint(url), None).unwrap();
+        let mut asr = CustomAsr::new(&endpoint(url), None, None).unwrap();
         asr.transcribe(&segment()).unwrap();
         let head = rx.recv().unwrap().head.to_lowercase();
         assert!(!head.contains("authorization"), "{head}");
@@ -375,7 +399,7 @@ mod tests {
             (400, r#"{"error":"unsupported response_format"}"#),
             (200, r#"{"text":"hello","language":"english"}"#),
         ]);
-        let mut asr = CustomAsr::new(&endpoint(url), None).unwrap();
+        let mut asr = CustomAsr::new(&endpoint(url), None, None).unwrap();
         let t = asr.transcribe(&segment()).unwrap();
         assert_eq!(t.text, "hello");
         assert_eq!(t.language, None);
@@ -391,8 +415,12 @@ mod tests {
             401,
             r#"{"error":{"message":"bad key sk-secret-999"}}"#,
         )]);
-        let mut asr =
-            CustomAsr::new(&endpoint(url), Some(Secret::new("sk-secret-999".into()))).unwrap();
+        let mut asr = CustomAsr::new(
+            &endpoint(url),
+            Some(Secret::new("sk-secret-999".into())),
+            None,
+        )
+        .unwrap();
         let err = asr.transcribe(&segment()).unwrap_err().to_string();
         assert!(err.contains("401"), "{err}");
         assert!(err.contains("API 키"), "{err}");
@@ -401,7 +429,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_base_url() {
-        assert!(CustomAsr::new(&endpoint("localhost:8000".into()), None).is_err());
-        assert!(CustomAsr::new(&endpoint("".into()), None).is_err());
+        assert!(CustomAsr::new(&endpoint("localhost:8000".into()), None, None).is_err());
+        assert!(CustomAsr::new(&endpoint("".into()), None, None).is_err());
     }
 }
