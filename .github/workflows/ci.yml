@@ -86,36 +86,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # sherpa-onnx-sys downloads a prebuilt archive in its build script with
-      # no retry (Windows run 42464042742 failed on it). Fetch it once with
-      # retries, keep it in the Actions cache, and point the build script at it.
-      - name: sherpa-onnx prebuilt archive (name)
-        id: sherpa
-        shell: bash
-        run: |
-          v=$(grep -A1 '^name = "sherpa-onnx-sys"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
-          case "$RUNNER_OS-$RUNNER_ARCH" in
-            Windows-X64) f="sherpa-onnx-v$v-win-x64-static-MT-Release-lib.tar.bz2" ;;
-            macOS-ARM64) f="sherpa-onnx-v$v-osx-arm64-static-lib.tar.bz2" ;;
-            macOS-X64) f="sherpa-onnx-v$v-osx-x64-static-lib.tar.bz2" ;;
-            *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
-          esac
-          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/sherpa-onnx
-          key: sherpa-onnx-${{ steps.sherpa.outputs.file }}
-      - name: sherpa-onnx prebuilt archive (download)
-        shell: bash
-        run: |
-          # On a GitHub releases outage (504, 2026-11-08) keep going: the build
-          # script reuses the unpacked archive in the restored Rust cache.
-          d="$RUNNER_TEMP/sherpa-onnx"; mkdir -p "$d"; cd "$d"
-          f=${{ steps.sherpa.outputs.file }}
-          [ -s "$f" ] || { curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$f.part" \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f" \
-            && mv "$f.part" "$f"; } || rm -f "$f.part"
-          if [ -s "$f" ]; then echo "SHERPA_ONNX_ARCHIVE_DIR=$d" >> "$GITHUB_ENV"; else echo "::warning::sherpa-onnx archive download failed"; fi
+      - uses: ./.github/actions/sherpa-libs
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -133,6 +104,45 @@ jobs:
       - name: OS credential store round-trip
         working-directory: src-tauri
         run: cargo test secrets -- --ignored
+
+  # End to end with real models (VAD, Whisper base, speaker embedding, Qwen2.5
+  # 1.5B): engine::tests::pipeline_end_to_end. Manual runs only (about 1.5 GB
+  # of models, cached).
+  e2e:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      LLAMA_LIB_PROFILE: Release
+      MORAGO_TEST_MODELS: ${{ github.workspace }}/e2e/models
+      MORAGO_TEST_WAVS: ${{ github.workspace }}/e2e/wavs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/sherpa-libs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: e2e
+          cache-directories: src-tauri/target/sherpa-onnx-prebuilt
+      - uses: actions/cache@v4
+        with:
+          path: e2e/models
+          key: e2e-models-v1
+      - name: Test speech clips (sherpa-onnx model test files)
+        shell: bash
+        run: |
+          mkdir -p e2e/wavs && cd e2e/wavs
+          hf=https://huggingface.co/csukuangfj
+          curl -fsSL --retry 5 -o en0.wav $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
+          curl -fsSL --retry 5 -o sv_ko.wav $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ko.wav
+          curl -fsSL --retry 5 -o sv_ja.wav $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
+      - name: End-to-end pipeline test
+        working-directory: src-tauri
+        run: cargo test --lib engine::tests::pipeline_end_to_end -- --ignored --nocapture
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs.
   bundle:
@@ -156,36 +166,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-      # sherpa-onnx-sys downloads a prebuilt archive in its build script with
-      # no retry (Windows run 42464042742 failed on it). Fetch it once with
-      # retries, keep it in the Actions cache, and point the build script at it.
-      - name: sherpa-onnx prebuilt archive (name)
-        id: sherpa
-        shell: bash
-        run: |
-          v=$(grep -A1 '^name = "sherpa-onnx-sys"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
-          case "$RUNNER_OS-$RUNNER_ARCH" in
-            Windows-X64) f="sherpa-onnx-v$v-win-x64-static-MT-Release-lib.tar.bz2" ;;
-            macOS-ARM64) f="sherpa-onnx-v$v-osx-arm64-static-lib.tar.bz2" ;;
-            macOS-X64) f="sherpa-onnx-v$v-osx-x64-static-lib.tar.bz2" ;;
-            *) echo "no archive for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
-          esac
-          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "file=$f" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/sherpa-onnx
-          key: sherpa-onnx-${{ steps.sherpa.outputs.file }}
-      - name: sherpa-onnx prebuilt archive (download)
-        shell: bash
-        run: |
-          # On a GitHub releases outage (504, 2026-11-08) keep going: the build
-          # script reuses the unpacked archive in the restored Rust cache.
-          d="$RUNNER_TEMP/sherpa-onnx"; mkdir -p "$d"; cd "$d"
-          f=${{ steps.sherpa.outputs.file }}
-          [ -s "$f" ] || { curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$f.part" \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${{ steps.sherpa.outputs.version }}/$f" \
-            && mv "$f.part" "$f"; } || rm -f "$f.part"
-          if [ -s "$f" ]; then echo "SHERPA_ONNX_ARCHIVE_DIR=$d" >> "$GITHUB_ENV"; else echo "::warning::sherpa-onnx archive download failed"; fi
+      - uses: ./.github/actions/sherpa-libs
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
