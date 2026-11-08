@@ -21,7 +21,7 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 
 ## Commands
 
-- Setup (Linux/WSL dev): `rustup default stable`, `rustup component add rustfmt clippy`, `pnpm install`. Linux needs webkit2gtk-4.1 and cmake.
+- Setup (Linux/WSL dev): `rustup default stable`, `rustup component add rustfmt clippy`, `pnpm install`. Linux needs webkit2gtk-4.1, cmake, clang, libclang-dev.
 - All local checks: `scripts/gate/check.sh` (pnpm build, cargo fmt --check, clippy -D warnings, cargo test).
 - Light check while editing: `cd src-tauri && cargo check`.
 - Run the app: `pnpm tauri dev`.
