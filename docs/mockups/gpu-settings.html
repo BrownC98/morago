@@ -219,10 +219,11 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
 </head>
 <body data-ui=".ab, .sel, .tab, .ro, .inp, .sw, .search">
 <main class="doc">
-  <div class="who"><span class="doc-id">문서 ID: <b>M80</b></span><span>응답할 곳: <b>총괄 · morago 총괄</b></span><span>연 담당: <b>코디 · 코디 GPU가속</b></span><span>v1 · 2026-11-08</span></div>
+  <div class="who"><span class="doc-id">문서 ID: <b>M80</b></span><span>응답할 곳: <b>총괄 · morago 총괄</b></span><span>연 담당: <b>코디 · 코디 GPU가속</b></span><span>v2 · 2026-11-08 (v1 승인, D1·D2 결정 반영 기록용)</span></div>
   <h1>GPU 가속: 설정과 회의 화면</h1>
   <p class="lead">사람의 요구: 「GPU 쓸 수 있으면 GPU 쓰게 만들어」. 쓸 수 있는 GPU가 있으면 음성 인식(Whisper)과 번역 모델을 GPU에서 돌리고, 없으면 지금처럼 CPU에서 돌립니다. GPU가 있는 컴퓨터와 없는 컴퓨터가 같은 설치 파일을 씁니다. 화면의 장치 이름과 모델은 이 PC(RTX 5060) 예시입니다.</p>
-  <div class="flow"><b>① 설정 › GPU 가속</b>에서 「자동」(처음 값) 또는 「끔」 → 회의를 시작하면 모델을 고른 장치에 불러옴 → <b>② 회의</b> 아래 줄에 장치를 보임 → GPU로 불러오지 못하면 CPU로 바꾸고 알림</div>
+  <div class="flow"><b>① 설정 › GPU 가속</b>에서 「자동」(처음 값), GPU 하나 또는 「끔」 → 회의를 시작하면 모델을 고른 장치에 불러옴 → <b>② 회의</b> 아래 줄에 장치를 보임 → GPU로 불러오지 못하면 회의를 시작하지 않고 원인을 보임</div>
+  <p class="lead">결정(2026-11-08): D1 B: 설정에 GPU 목록을 두고 사람이 고릅니다(자동은 외장 GPU 먼저). D2 B: GPU로 불러오지 못하면 회의를 시작하지 않고 오류를 보입니다. 회의 중 GPU 오류는 회의를 멈추고 저장한 뒤 오류를 보입니다.</p>
 
   <div class="fig">
     <h2>① 설정 › GPU 가속</h2>
@@ -247,8 +248,8 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
           <div style="height:70px"></div>
           <div class="grp"><h3>GPU 가속</h3>
             <div class="card">
-              <div class="fld"><label>GPU 사용</label><span class="mk new" data-n="2"><span class="radio"><span class="ro" aria-checked="true">자동</span><span class="ro">끔</span></span></span></div>
-              <span class="fhint">자동: 쓸 수 있는 GPU가 있으면 모델을 GPU에서 돌리고, 없으면 CPU에서 돌립니다. 끔: 늘 CPU에서 돌립니다. 바꾼 값은 다음 회의를 시작할 때 적용합니다.</span>
+              <div class="fld"><label>GPU 사용</label><span class="mk new" data-n="2"><span class="radio"><span class="ro" aria-checked="true">자동</span><span class="ro">NVIDIA GeForce RTX 5060 Laptop GPU</span><span class="ro">Intel Arc 140T GPU</span><span class="ro">끔</span></span></span></div>
+              <span class="fhint">자동: 외장 GPU를 먼저 쓰고, 쓸 수 있는 GPU가 없으면 CPU에서 돌립니다. GPU 이름을 고르면 그 GPU만 씁니다. 끔: 늘 CPU에서 돌립니다. 바꾼 값은 다음 회의를 시작할 때 적용합니다.</span>
               <span class="mk new" data-n="3"><span style="display:block">
                 <span class="mrow"><span class="n">음성 인식</span><span class="s">GPU</span><span class="fhint">NVIDIA GeForce RTX 5060 Laptop GPU · Vulkan</span><span></span></span>
                 <span class="mrow"><span class="n">번역</span><span class="s">GPU</span><span class="fhint">NVIDIA GeForce RTX 5060 Laptop GPU · Vulkan</span><span></span></span>
@@ -267,56 +268,39 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
     </div>
     <div class="calls">
       <div><b>1</b><span>새 설정 칸</span></div>
-      <div><b>2</b><span>처음 값은 「자동」. 「끔」은 CPU만 씀</span></div>
+      <div><b>2</b><span>이 컴퓨터에서 찾은 GPU 목록</span></div>
       <div><b>3</b><span>모델마다 지금 쓰는 장치입니다. GPU가 없는 컴퓨터는 모두 「CPU」로 보입니다.</span></div>
     </div>
   </div>
 
-  <section class="decision" id="D1" data-for="2">
-    <h3><span class="did">D1</span>GPU가 두 개(외장 + 내장)일 때 어느 GPU를 쓰는가</h3>
-    <div class="opts">
-      <div class="opt" data-recommended><span class="key">A</span><span class="label">앱이 외장 GPU를 자동으로 고름<span class="mark">권장</span><span class="sub">지금: 선택 없음 → 이후: 이 PC는 RTX 5060을 씀 · 사람이 고를 것 없음 · 바꾸려면 「끔」</span></span></div>
-      <div class="opt"><span class="key">B</span><span class="label">설정에 GPU 목록을 두고 사람이 고름<span class="sub">지금: 선택 없음 → 이후: 「자동 / RTX 5060 / Arc 140T / 끔」 · 칸이 하나 늘어남</span></span></div>
-    </div>
-    <ul class="why"><li>외장 GPU가 거의 늘 빠르고 메모리가 큽니다.</li><li>처음 쓰는 사람이 GPU 이름을 알 필요가 없습니다.</li></ul>
-  </section>
 
   <div class="fig">
-    <h2>② 회의 (GPU로 불러오지 못했을 때)</h2>
+    <h2>② 회의 (GPU로 불러오지 못해 시작하지 못함)</h2>
     <div class="page">
       <div class="top">
         <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="oklch(50% 0.19 258)" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M17 9l3 3-3 3"/></svg>morago</span>
         <span class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">회의</button><button class="tab" role="tab">기록</button><button class="tab" role="tab">설정</button></span>
-        <span class="sp"></span><span class="timer">00:02:10</span>
+        <span class="sp"></span>
       </div>
       <div class="live">
         <div class="ctl">
           <span class="row2" style="gap:16px"><span class="tog"><span class="sw"></span>마이크</span><span class="tog"><span class="sw"></span>시스템 소리</span></span>
           <span class="sp"></span>
           <span class="sel"><span class="lab">번역할 언어</span>한국어<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>
-          <button class="ab stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>중지하고 저장</button>
+          <button class="ab primary"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>회의 시작</button>
         </div>
         <div class="feed">
-          <span class="mk new" data-n="4"><span class="notice">번역 모델을 GPU에 불러오지 못해 CPU에서 돌립니다. 번역이 느릴 수 있습니다. 원인: GPU 메모리 부족</span></span>
-          <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:01:58–00:02:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap.</p><p class="tr">3분기 로드맵부터 시작하죠.</p></div></div>
+          <span class="mk new" data-n="4"><span class="notice">회의를 시작하지 못했습니다. 번역 모델을 NVIDIA GeForce RTX 5060 Laptop GPU에 불러오지 못했습니다. 원인: GPU 메모리 부족. 설정 › GPU 가속에서 다른 GPU나 「끔」을 고른 뒤 다시 시작하세요.</span></span>
         </div>
       </div>
-      <div class="bar"><span class="mk new" data-n="5"><span><span class="dot"></span>음성 인식: 로컬 Whisper turbo · GPU</span>　<span><span class="dot"></span>번역: 로컬 Gemma 4 E2B · CPU</span></span><span class="sp"></span><span>자동 저장: 발화 1개</span></div>
+      <div class="bar"><span class="mk new" data-n="5"><span><span class="dot"></span>음성 인식: 로컬 Whisper turbo · GPU</span>　<span><span class="dot"></span>번역: 로컬 Gemma 4 E2B · GPU</span></span><span class="sp"></span><span></span></div>
     </div>
     <div class="calls">
-      <div><b>4</b><span>GPU로 불러오다 실패하면 회의를 멈추지 않고 CPU로 바꿉니다. 이 알림은 회의가 끝날 때까지 남습니다.</span></div>
+      <div><b>4</b><span>회의를 시작하지 않고 원인과 할 일을 보입니다. 회의 중에 GPU 오류가 나면 회의를 멈추고 저장한 뒤 이렇게 보입니다.</span></div>
       <div><b>5</b><span>아래 줄에 모델마다 GPU 또는 CPU를 짧게 붙입니다.</span></div>
     </div>
   </div>
 
-  <section class="decision" id="D2" data-for="4">
-    <h3><span class="did">D2</span>GPU로 모델을 불러오지 못하면 어떻게 하는가</h3>
-    <div class="opts">
-      <div class="opt" data-recommended><span class="key">A</span><span class="label">CPU로 바꿔 계속하고 사라지지 않는 알림을 보임<span class="mark">권장</span><span class="sub">회의가 끊기지 않음 · 느려질 수 있음을 알림으로 앎</span></span></div>
-      <div class="opt"><span class="key">B</span><span class="label">회의를 시작하지 않고 오류를 보임<span class="sub">사람이 「끔」으로 바꾼 뒤 다시 시작해야 함</span></span></div>
-    </div>
-    <ul class="why"><li>회의 중에는 자막이 늦더라도 이어지는 편이 낫습니다.</li><li>알림에 원인을 적어 「끔」을 고를지 판단할 수 있습니다.</li></ul>
-  </section>
 </main>
 <button type="button" class="theme-toggle" onclick="const h=document.documentElement;const dark=h.style.colorScheme==='dark';h.style.colorScheme=dark?'light':'dark';this.textContent=dark?'다크로 보기':'라이트로 보기';">다크로 보기</button>
 <script>
