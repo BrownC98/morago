@@ -7,6 +7,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=BrownC98/morago
 TIMEOUT=${CI_WAIT_TIMEOUT:-3600}
+# Jobs that must pass: "check" on both OSes; for a merge into master also
+# "bundle" (installers) on both OSes.
+NEED="check"
+[ "$(git branch --show-current)" = master ] && NEED="check bundle"
 
 run_for() { # prints the newest ci.yml run id for a commit, or nothing
   gh run list -R "$REPO" --workflow ci.yml --commit "$1" -L 1 \
@@ -29,13 +33,14 @@ check_sha() {
     echo "gate: CI run $id failed or timed out" >&2
     return 1
   }
-  local ok
-  ok=$(gh run view -R "$REPO" "$id" --json jobs \
-    -q '[.jobs[] | select(.conclusion == "success") | .name] | map(select(test("windows|macos"))) | length')
-  if [ "$ok" -lt 2 ]; then
-    echo "gate: run $id lacks a successful Windows and macOS job" >&2
-    return 1
-  fi
+  local job ok
+  for job in $NEED; do
+    ok=$(gh run view -R "$REPO" "$id" --json jobs -q "[.jobs[] | select(.conclusion == \"success\" and (.name | startswith(\"$job \")) and (.name | test(\"windows|macos\")))] | length")
+    if [ "$ok" -lt 2 ]; then
+      echo "gate: run $id lacks a successful '$job' job on Windows and macOS" >&2
+      return 1
+    fi
+  done
 }
 
 head=$(git rev-parse HEAD)
