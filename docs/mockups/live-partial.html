@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>M81 실시간 원문 미리 보기 목업</title>
+<title>M81 실시간 원문·번역 미리 보기 목업</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
@@ -216,15 +216,16 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
 .row2 { display: flex; gap: 8px; align-items: center; }
 .notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-radius: 6px; background: var(--a-warn-wash); color: var(--a-warn-ink); font-size: 13px; }
 .utt.partial .spk::before { display: none; }
-.utt.partial .spk, .utt.partial .orig { color: var(--a-ink-3); font-style: italic; font-weight: 400; }
+.utt.partial .spk, .utt.partial .orig, .utt.partial .tr { color: var(--a-ink-3); font-style: italic; }
+.utt.partial .spk, .utt.partial .orig { font-weight: 400; }
 </style>
 </head>
 <body data-ui=".ab, .sel, .tab, .sw">
 <main class="doc">
-  <div class="who"><span class="doc-id">문서 ID: <b>M81</b></span><span>응답할 곳: <b>코디 · 코디 실시간자막</b></span><span>연 담당: <b>코디 · 코디 실시간자막</b></span><span>v1 · 2026-11-09</span></div>
-  <h1>회의 화면: 말하는 동안 원문 미리 보기</h1>
-  <p class="lead">사람의 결정(Q2776 A): 누가 말하는 동안 회의 화면에 원문이 0.5–1초마다 늘어나며 보입니다. 발화가 끝나면 지금처럼 최종 원문과 번역이 그 자리를 대신합니다. 번역은 최종 원문만 합니다. 승인된 화면(M78 ① 회의)에 한 줄만 더합니다.</p>
-  <div class="flow"><b>① 말하는 중</b>: 회색 줄의 원문이 늘어남 → 말이 끝남(0.5초 쉼) → <b>② 발화 끝</b>: 화자·시각·원문이 있는 보통 발화 줄로 바뀌고 번역이 채워짐</div>
+  <div class="who"><span class="doc-id">문서 ID: <b>M81</b></span><span>응답할 곳: <b>코디 · 코디 실시간자막</b></span><span>연 담당: <b>코디 · 코디 실시간자막</b></span><span>v2 · 2026-11-09 (v1 승인, 회색 줄에 번역 추가)</span></div>
+  <h1>회의 화면: 말하는 동안 원문과 번역 미리 보기</h1>
+  <p class="lead">사람의 결정(Q2776 A): 누가 말하는 동안 회의 화면에 원문이 0.5–1초마다 늘어나며 보입니다. 발화가 끝나면 지금처럼 최종 원문과 번역이 그 자리를 대신합니다. 사람의 추가 지시: 「번역도 실시간으로 나오게 해」. 회색 줄에 그때까지의 원문 번역도 보입니다. 승인된 화면(M78 ① 회의)에 회색 발화 줄 하나만 더합니다.</p>
+  <div class="flow"><b>① 말하는 중</b>: 회색 줄의 원문과 번역이 늘어남 → 말이 끝남(0.5초 쉼) → <b>② 발화 끝</b>: 화자·시각·원문이 있는 보통 발화 줄로 바뀌고 번역이 채워짐</div>
 
   <div class="fig">
     <h2>① 말하는 중</h2>
@@ -246,13 +247,13 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
           <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:11:58–00:12:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap. We moved the launch to the second week of December.</p><p class="tr">3분기 로드맵부터 시작하죠. 출시를 12월 둘째 주로 옮겼습니다.</p></div></div>
           <div class="utt"><div class="who-c"><span class="spk me">화자 2</span><span class="src">마이크</span><span class="tm">00:12:07–00:12:11</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>그럼 베타 테스트 일정도 같이 밀리나요?</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
           <div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:12:13–00:12:24</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>ベータは予定通り11月末に始めます。フィードバックは二週間で集めます。</p><p class="tr">베타는 예정대로 11월 말에 시작합니다. 피드백은 2주 동안 모읍니다.</p></div></div>
-          <div class="mk new" data-n="1"><div class="utt partial"><div class="who-c"><span class="spk">듣는 중…</span><span class="src">시스템 소리</span><span class="tm">00:12:26</span></div><div class="txt"><p class="orig">Good. Then marketing needs the final</p></div></div></div>
+          <div class="mk new" data-n="1"><div class="utt partial"><div class="who-c"><span class="spk">듣는 중…</span><span class="src">시스템 소리</span><span class="tm">00:12:26</span></div><div class="txt"><p class="orig">Good. Then marketing needs the final</p><p class="tr">좋습니다. 그럼 마케팅은 최종</p></div></div></div>
         </div>
       </div>
       <div class="bar"><span class="mk" data-n="2"><span><span class="dot"></span>음성 인식: 로컬 SenseVoice Small</span>　<span><span class="dot"></span>번역: 로컬 Gemma 4 E2B</span></span><span class="sp"></span><span>자동 저장: 발화 3개</span></div>
     </div>
     <div class="calls">
-      <div><b>1</b><span>말하는 동안 보이는 회색 기울임 줄입니다. 화자 대신 「듣는 중…」, 들어온 곳, 말을 시작한 시각을 보입니다. 원문은 0.7초쯤마다 다시 알아들어 늘어나고, 앞부분이 고쳐질 수도 있습니다. 번역은 없습니다.</span></div>
+      <div><b>1</b><span>말하는 동안 보이는 회색 기울임 줄입니다. 화자 대신 「듣는 중…」, 들어온 곳, 말을 시작한 시각을 보입니다. 원문은 0.7초쯤마다 다시 알아들어 늘어나고, 앞부분이 고쳐질 수도 있습니다. 그 아래 회색 번역은 번역 모델이 쉴 때 최신 원문으로 다시 만들므로 원문보다 늦게 따라옵니다.</span></div>
       <div><b>2</b><span>원문 미리 보기는 로컬 SenseVoice Small에서 보입니다. 사용자 지정 서비스와 느린 로컬 모델은 지금처럼 발화가 끝난 뒤에 원문이 보입니다.</span></div>
     </div>
   </div>
@@ -283,7 +284,7 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
       <div class="bar"><span><span><span class="dot"></span>음성 인식: 로컬 SenseVoice Small</span>　<span><span class="dot"></span>번역: 로컬 Gemma 4 E2B</span></span><span class="sp"></span><span>자동 저장: 발화 4개</span></div>
     </div>
     <div class="calls">
-      <div><b>3</b><span>말이 끝나면 회색 줄이 사라지고, 같은 자리에 화자·시작–끝 시각·언어가 있는 최종 원문이 들어옵니다. 번역은 지금처럼 「번역하는 중…」 뒤에 채워집니다.</span></div>
+      <div><b>3</b><span>말이 끝나면 회색 줄이 사라지고, 같은 자리에 화자·시작–끝 시각·언어가 있는 최종 원문이 들어옵니다. 최종 번역은 지금처럼 「번역하는 중…」 뒤에 채워집니다.</span></div>
     </div>
   </div>
 
@@ -307,7 +308,7 @@ h2 .tag { font: 12px var(--mono); color: var(--ink-3); }
           <div class="utt"><div class="who-c"><span class="spk s1">화자 1</span><span class="src">시스템 소리</span><span class="tm">00:11:58–00:12:06</span></div><div class="txt"><p class="orig"><span class="lg">EN</span>Let's start with the Q3 roadmap. We moved the launch to the second week of December.</p><p class="tr">3분기 로드맵부터 시작하죠. 출시를 12월 둘째 주로 옮겼습니다.</p></div></div>
           <div class="utt"><div class="who-c"><span class="spk me">화자 2</span><span class="src">마이크</span><span class="tm">00:12:07–00:12:11</span></div><div class="txt"><p class="orig"><span class="lg">KO</span>그럼 베타 테스트 일정도 같이 밀리나요?</p><p class="tr same">같은 언어라 번역하지 않음</p></div></div>
           <div class="utt"><div class="who-c"><span class="spk s2">화자 3</span><span class="src">시스템 소리</span><span class="tm">00:12:13–00:12:24</span></div><div class="txt"><p class="orig"><span class="lg">JA</span>ベータは予定通り11月末に始めます。フィードバックは二週間で集めます。</p><p class="tr">베타는 예정대로 11월 말에 시작합니다. 피드백은 2주 동안 모읍니다.</p></div></div>
-          <div class="utt partial"><div class="who-c"><span class="spk">듣는 중…</span><span class="src">시스템 소리</span><span class="tm">00:12:26</span></div><div class="txt"><p class="orig">Good. Then marketing needs the final</p></div></div>
+          <div class="utt partial"><div class="who-c"><span class="spk">듣는 중…</span><span class="src">시스템 소리</span><span class="tm">00:12:26</span></div><div class="txt"><p class="orig">Good. Then marketing needs the final</p><p class="tr">좋습니다. 그럼 마케팅은 최종</p></div></div>
         </div>
       </div>
       <div class="bar"><span><span><span class="dot"></span>음성 인식: 로컬 SenseVoice Small</span>　<span><span class="dot"></span>번역: 로컬 Gemma 4 E2B</span></span><span class="sp"></span><span>자동 저장: 발화 3개</span></div>
