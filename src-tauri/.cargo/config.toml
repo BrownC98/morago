@@ -1,0 +1,4 @@
+# Windows: sherpa-onnx ships static-CRT (/MT) libraries. llama.cpp must use the
+# same CRT, or the link fails (LNK2038, LNK2005). No effect on other targets.
+[env]
+LLAMA_STATIC_CRT = "1"
