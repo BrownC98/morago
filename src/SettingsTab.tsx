@@ -218,41 +218,51 @@ function ExtraBodyField({
   saved,
   onText,
   onCommit,
+  commitRef,
 }: {
   initial: string;
   saved?: ExtraBody;
   onText: (text: string) => void;
   onCommit: (body: ExtraBody) => void;
+  /** Set to `commit`: true when the text is valid and its save is queued. */
+  commitRef: React.MutableRefObject<(() => Promise<boolean>) | null>;
 }) {
   const [text, setText] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   // Only the newest check sets `error`.
   const checkId = useRef(0);
+  const liveCheck = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const n = ++checkId.current;
-    const t = window.setTimeout(() => {
+    liveCheck.current = window.setTimeout(() => {
       api.checkExtraBody(text).then(
         () => n === checkId.current && setError(null),
         (e) => n === checkId.current && setError(errText(e)),
       );
     }, 300);
-    return () => window.clearTimeout(t);
+    return () => window.clearTimeout(liveCheck.current);
   }, [text]);
 
   const commit = async () => {
+    // A live check that starts later must not cancel this commit.
+    window.clearTimeout(liveCheck.current);
     const n = ++checkId.current;
     try {
       await api.checkExtraBody(text);
     } catch (e) {
       if (n === checkId.current) setError(errText(e));
-      return;
+      return false;
     }
-    if (n !== checkId.current) return;
+    if (n !== checkId.current) return false;
     setError(null);
     const body = (text.trim() ? JSON.parse(text) : {}) as ExtraBody;
     if (JSON.stringify(body) !== JSON.stringify(saved ?? {})) onCommit(body);
+    return true;
   };
+  useEffect(() => {
+    commitRef.current = commit;
+  });
 
   return (
     <>
@@ -320,13 +330,17 @@ function EndpointForm({
   role,
   endpoint,
   onCommit,
+  beforeTest,
   children,
 }: {
   role: KeyRole;
   endpoint: Endpoint;
   onCommit: (e: Endpoint) => void;
+  /** Commits the fields in `children`: false stops the test. */
+  beforeTest?: () => Promise<boolean>;
   children?: React.ReactNode;
 }) {
+  const { settled } = useApp();
   const [url, setUrl] = useState(endpoint.base_url);
   const [model, setModel] = useState(endpoint.model);
   const [test, setTest] = useState<{ ok: boolean; message: string } | "busy" | null>(null);
@@ -347,6 +361,11 @@ function EndpointForm({
     commit();
     setTest("busy");
     try {
+      // The core tests the saved settings, so the test waits for the fields on screen to be saved.
+      if (!(await (beforeTest?.() ?? true)) || !(await settled())) {
+        setTest(null);
+        return;
+      }
       setTest(await api.testProvider(role));
     } catch (e) {
       setTest({ ok: false, message: errText(e) });
@@ -413,6 +432,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
   const lastExtra = useRef<ExtraBody | undefined>(undefined);
   // The typed text, also when it is not valid and so not saved.
   const extraText = useRef<string | null>(null);
+  const commitExtra = useRef<(() => Promise<boolean>) | null>(null);
   const lastInterval = useRef<number | null | undefined>(undefined);
   const lastLocal = useRef<string | null>(null);
   if (cfg?.kind === "custom") {
@@ -466,6 +486,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
             role={role}
             endpoint={cfg.endpoint}
             onCommit={(endpoint) => set(custom(endpoint, cfg.extra_body, cfg.partial_interval_ms))}
+            beforeTest={role === "translate" ? () => commitExtra.current?.() ?? Promise.resolve(true) : undefined}
           >
             {role === "translate" && (
               <>
@@ -474,6 +495,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
                   saved={cfg.extra_body}
                   onText={(t) => (extraText.current = t)}
                   onCommit={(body) => set(custom(cfg.endpoint, body, cfg.partial_interval_ms))}
+                  commitRef={commitExtra}
                 />
                 <IntervalField
                   interval={cfg.partial_interval_ms}
