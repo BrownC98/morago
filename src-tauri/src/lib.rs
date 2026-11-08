@@ -1,6 +1,3 @@
-// Stubs leave parts unused until the module branches merge. Remove at integration.
-#![allow(dead_code)]
-
 mod audio;
 mod commands;
 mod engine;

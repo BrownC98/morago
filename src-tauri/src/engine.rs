@@ -24,7 +24,9 @@ pub trait Sink: Send + Sync + 'static {
     fn utterance(&self, u: &Utterance);
     fn level(&self, source: SourceKind, rms: f32);
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str);
-    /// Streaming ASR only (follow-up live mode).
+    /// Streaming ASR only (follow-up live mode). Kept as the ready interface
+    /// (human decision 2026-11-08); nothing calls it yet.
+    #[allow(dead_code)]
     fn partial(&self, p: &PartialText) {
         let _ = p;
     }

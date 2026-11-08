@@ -131,6 +131,7 @@ pub struct DownloadProgress {
 /// "live mode"). The UI shows one partial line per source and removes it
 /// when an `Utterance` of the same source arrives. The VAD + Whisper
 /// pipeline does not send it.
+#[allow(dead_code)] // Reserved for the follow-up live mode (human decision 2026-11-08).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PartialText {
     pub source: SourceKind,
