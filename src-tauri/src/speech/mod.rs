@@ -106,13 +106,8 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("morago-test-models"));
         let asr_id = std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| "whisper-base".into());
-        for id in [
-            models::VAD_MODEL_ID,
-            models::SPEAKER_MODEL_ID,
-            asr_id.as_str(),
-        ] {
-            ensure_model(&models_dir, id);
-        }
+        ensure_model(&models_dir, &asr_id);
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
         let mut asr = build_asr(
             &AsrConfig::Local {
                 model_id: asr_id.clone(),
@@ -121,8 +116,8 @@ mod tests {
         )
         .unwrap();
         println!("ASR: {}", asr.label());
-        let mut vad = Vad::new(&models_dir).unwrap();
-        let mut diarizer = Diarizer::new(&models_dir).unwrap();
+        let mut vad = Vad::new(&bundled).unwrap();
+        let mut diarizer = Diarizer::new(&bundled).unwrap();
 
         // Several languages and voices in one stream, 1.2 s of silence between them.
         let gap = vec![0.0f32; SAMPLE_RATE as usize * 6 / 5];
@@ -161,7 +156,7 @@ mod tests {
         );
 
         // Same voice vs different voices: two 2 s windows from each clip.
-        let diarizer = Diarizer::new(&models_dir).unwrap();
+        let diarizer = Diarizer::new(&bundled).unwrap();
         let clips = ["en0", "en1", "sv_ko", "sv_ja", "sv_zh", "sv_en", "sv_yue"];
         let mut embeddings = Vec::new();
         for (clip, name) in clips.iter().enumerate() {

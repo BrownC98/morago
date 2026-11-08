@@ -198,3 +198,4 @@ output.inp { background: var(--a-side); overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+.notice-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--a-ink-2); display: grid; gap: 4px; }

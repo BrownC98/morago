@@ -35,6 +35,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "14.2"
+    },
+    "resources": {
+      "resources/models/": "models/"
     }
   }
 }

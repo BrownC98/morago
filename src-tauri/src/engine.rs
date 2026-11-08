@@ -77,16 +77,9 @@ pub struct Running {
     store_root: PathBuf,
 }
 
-/// Model ids that a session with these settings needs on disk.
+/// Downloaded model ids that a session with these settings needs on disk.
 pub fn required_models(settings: &Settings) -> Vec<String> {
-    let mut ids: Vec<String> = models::catalog()
-        .into_iter()
-        .filter(|m| {
-            m.kind == models::ModelKind::Vad
-                || (settings.diarize && m.kind == models::ModelKind::SpeakerEmbedding)
-        })
-        .map(|m| m.id)
-        .collect();
+    let mut ids = Vec::new();
     if let AsrConfig::Local { model_id } = &settings.asr {
         ids.push(model_id.clone());
     }
@@ -130,19 +123,21 @@ fn start_pipeline(
     settings: &Settings,
     title: Option<String>,
     models_dir: &Path,
+    bundled_dir: &Path,
     store: &SessionStore,
     sink: &Arc<dyn Sink>,
 ) -> anyhow::Result<Pipeline> {
     let asr = speech::build_asr(&settings.asr, models_dir)?;
     let translator = translate::build_translator(&settings.translate, models_dir)?;
+    models::verify_bundled(bundled_dir)?;
     let diarizer = if settings.diarize {
-        Some(Diarizer::new(models_dir)?)
+        Some(Diarizer::new(bundled_dir)?)
     } else {
         None
     };
     let mut vads = Vec::new();
     for source in [SourceKind::Mic, SourceKind::System] {
-        vads.push((source, Vad::new(models_dir)?));
+        vads.push((source, Vad::new(bundled_dir)?));
     }
 
     let now = chrono::Local::now();
@@ -203,6 +198,7 @@ pub fn start(
     settings: &Settings,
     title: Option<String>,
     models_dir: &Path,
+    bundled_dir: &Path,
     store: &SessionStore,
     sink: Arc<dyn Sink>,
 ) -> anyhow::Result<Running> {
@@ -226,7 +222,7 @@ pub fn start(
         audio_tx,
         threads,
         writer,
-    } = start_pipeline(settings, title, models_dir, store, &sink)?;
+    } = start_pipeline(settings, title, models_dir, bundled_dir, store, &sink)?;
 
     let t0 = Instant::now();
     let mut captures = Vec::new();
@@ -465,12 +461,8 @@ mod tests {
     fn pipeline_end_to_end() {
         use crate::settings::{AsrConfig, TranslateConfig};
         let models_dir = PathBuf::from(std::env::var("MORAGO_TEST_MODELS").unwrap());
-        let ids = [
-            models::VAD_MODEL_ID,
-            models::SPEAKER_MODEL_ID,
-            "whisper-base",
-            "qwen2.5-1.5b-instruct-q4",
-        ];
+        let ids = ["whisper-base", "qwen2.5-1.5b-instruct-q4"];
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
         for id in ids {
             if !models::is_installed(&models_dir, id) {
                 let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -498,7 +490,15 @@ mod tests {
         let store = SessionStore::new(root.path());
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn Sink> = recorder.clone();
-        let p = start_pipeline(&settings, Some("e2e".into()), &models_dir, &store, &sink).unwrap();
+        let p = start_pipeline(
+            &settings,
+            Some("e2e".into()),
+            &models_dir,
+            &bundled,
+            &store,
+            &sink,
+        )
+        .unwrap();
 
         // System: English, then Japanese. Mic: Korean in the gap between them.
         let silence = vec![0.0f32; 16_000];

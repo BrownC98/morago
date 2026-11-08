@@ -69,7 +69,7 @@ export interface Settings {
   sessions_dir: string | null;
 }
 
-export type ModelKind = "asr" | "vad" | "speakerembedding" | "translation";
+export type ModelKind = "asr" | "translation";
 
 export interface ModelInfo {
   id: string;

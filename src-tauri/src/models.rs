@@ -1,9 +1,9 @@
-//! Local model catalog and downloads (ASR, VAD, speaker embedding, translation LLM).
-//! Owner: speech worker. Contract (do not change signatures without the coordinator).
-//!
-//! Every model is a folder `<models_dir>/<id>` with fixed file names (see `SPECS`).
-//! The UI lists only `Asr` and `Translation` models; the engine downloads the VAD
-//! and speaker-embedding models (`VAD_MODEL_ID`, `SPEAKER_MODEL_ID`) with the ASR model.
+//! Local models. Every model is a folder `<dir>/<id>` with fixed file names.
+//! - Downloads chosen by the user (ASR, translation LLM): `SPECS`, into the
+//!   app data folder.
+//! - Shipped in the installer (Silero VAD, CAM++ speaker embedding): `BUNDLED`,
+//!   in the Tauri resource folder `models/` (human decision 2026-11-08: no
+//!   download for them). Checked with `verify_bundled` before use.
 
 use crate::types::DownloadProgress;
 use anyhow::{Context, bail};
@@ -17,8 +17,6 @@ use std::time::Duration;
 #[serde(rename_all = "lowercase")]
 pub enum ModelKind {
     Asr,
-    Vad,
-    SpeakerEmbedding,
     Translation,
 }
 
@@ -34,10 +32,50 @@ pub struct ModelInfo {
     pub note: String,
 }
 
-/// Id of the Silero VAD model (needed by every local session).
+/// Id (folder) of the bundled Silero VAD model.
 pub const VAD_MODEL_ID: &str = "silero-vad";
-/// Id of the speaker-embedding model (needed when diarization is on).
+/// Id (folder) of the bundled speaker-embedding model.
 pub const SPEAKER_MODEL_ID: &str = "speaker-campplus";
+
+/// Models in the installer: (id, file, SHA-256). Licenses and sources:
+/// `src-tauri/resources/models/NOTICE.md`.
+pub const BUNDLED: &[(&str, &str, &str)] = &[
+    (
+        VAD_MODEL_ID,
+        VAD_FILE,
+        "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+    ),
+    (
+        SPEAKER_MODEL_ID,
+        SPEAKER_FILE,
+        "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+    ),
+];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Checks the shipped models in `dir` (the resource folder `models/`).
+pub fn verify_bundled(dir: &Path) -> anyhow::Result<()> {
+    for (id, file, sha) in BUNDLED {
+        let p = path(dir, id).join(file);
+        let bytes = std::fs::read(&p).with_context(|| {
+            format!(
+                "앱에 들어 있는 모델이 없습니다: {}. 앱을 다시 설치하십시오.",
+                p.display()
+            )
+        })?;
+        if sha256_hex(&bytes) != *sha {
+            bail!("앱에 들어 있는 모델이 손상되었습니다: {id}. 앱을 다시 설치하십시오.");
+        }
+    }
+    Ok(())
+}
 
 /// File names inside a model folder. `speech` and `translate` read these.
 pub const VAD_FILE: &str = "model.onnx";
@@ -170,40 +208,6 @@ const SPECS: &[Spec] = &[
             361_080_764,
             "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547"
         ),
-    },
-    Spec {
-        id: VAD_MODEL_ID,
-        kind: ModelKind::Vad,
-        name: "Silero VAD",
-        note: "음성 구간 검출",
-        files: &[FileSpec {
-            // k2-fsa/sherpa-onnx release "asr-models", asset silero_vad.onnx; the
-            // API asset URL (same file) answered while releases/download gave
-            // 504 on 2026-11-08.
-            urls: &[
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-                "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/271935959",
-            ],
-            name: VAD_FILE,
-            size: 643_854,
-            sha256: "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
-        }],
-    },
-    Spec {
-        id: SPEAKER_MODEL_ID,
-        kind: ModelKind::SpeakerEmbedding,
-        name: "CAM++ 화자 임베딩 (중국어·영어)",
-        note: "화자 구분",
-        files: &[FileSpec {
-            urls: &[
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-                "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-                "https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-            ],
-            name: SPEAKER_FILE,
-            size: 28_281_164,
-            sha256: "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
-        }],
     },
     Spec {
         id: "qwen2.5-3b-instruct-q4",
@@ -473,8 +477,6 @@ mod tests {
             "whisper-medium",
             "qwen2.5-3b-instruct-q4",
             "qwen2.5-1.5b-instruct-q4",
-            VAD_MODEL_ID,
-            SPEAKER_MODEL_ID,
         ] {
             assert!(cat.iter().any(|m| m.id == id), "missing {id}");
         }
@@ -526,11 +528,31 @@ mod tests {
     }
 
     fn sha(bytes: &[u8]) -> String {
-        use sha2::{Digest, Sha256};
-        Sha256::digest(bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        sha256_hex(bytes)
+    }
+
+    /// The model files in the repository are the ones the app checks.
+    #[test]
+    fn bundled_models_match_their_hashes() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/models");
+        verify_bundled(&dir).unwrap();
+        assert!(
+            !catalog()
+                .iter()
+                .any(|m| BUNDLED.iter().any(|b| b.0 == m.id))
+        );
+    }
+
+    #[test]
+    fn a_damaged_bundled_model_is_reported() {
+        let dir = temp_dir("bundled");
+        for (id, file, _) in BUNDLED {
+            std::fs::create_dir_all(dir.join(id)).unwrap();
+            std::fs::write(dir.join(id).join(file), b"not a model").unwrap();
+        }
+        let err = verify_bundled(&dir).unwrap_err();
+        assert!(err.to_string().contains("손상"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -28,6 +28,8 @@ fn err(e: impl std::fmt::Display) -> String {
 pub struct AppState {
     settings_path: PathBuf,
     models_dir: PathBuf,
+    /// Models shipped in the installer (Tauri resources `models/`).
+    bundled_dir: PathBuf,
     default_sessions_dir: PathBuf,
     settings: Mutex<Settings>,
     running: Mutex<Option<Running>>,
@@ -39,6 +41,7 @@ impl AppState {
         let path = app.path();
         let settings_path = path.app_config_dir()?.join("settings.json");
         let models_dir = path.app_data_dir()?.join("models");
+        let bundled_dir = path.resource_dir()?.join("models");
         let default_sessions_dir = path
             .document_dir()
             .unwrap_or(path.app_data_dir()?)
@@ -48,6 +51,7 @@ impl AppState {
         Ok(Self {
             settings_path,
             models_dir,
+            bundled_dir,
             default_sessions_dir,
             settings: Mutex::new(settings),
             running: Mutex::new(None),
@@ -218,8 +222,7 @@ struct DownloadDone {
     error: Option<String>,
 }
 
-/// Downloads the model and the helper models (VAD, speaker embedding) that
-/// a session needs, so the user downloads only what the settings list shows.
+/// Downloads a model from the catalog. Progress and the end come as events.
 #[tauri::command]
 pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -231,32 +234,14 @@ pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) ->
         d.insert(id.clone(), cancel.clone());
     }
     let models_dir = state.models_dir.clone();
-    let mut ids: Vec<String> = models::catalog()
-        .into_iter()
-        .filter(|m| {
-            matches!(
-                m.kind,
-                models::ModelKind::Vad | models::ModelKind::SpeakerEmbedding
-            ) && !models::is_installed(&models_dir, &m.id)
-        })
-        .map(|m| m.id)
-        .collect();
-    ids.push(id.clone());
     std::thread::spawn(move || {
         let progress_app = app.clone();
         let progress = move |p: DownloadProgress| {
             let _ = progress_app.emit("model-download", p);
         };
-        let mut error = None;
-        for one in &ids {
-            if models::is_installed(&models_dir, one) {
-                continue;
-            }
-            if let Err(e) = models::download(&models_dir, one, &progress, &cancel) {
-                error = Some(e.to_string());
-                break;
-            }
-        }
+        let error = models::download(&models_dir, &id, &progress, &cancel)
+            .err()
+            .map(|e| e.to_string());
         if let Some(state) = app.try_state::<AppState>() {
             state.downloads.lock().expect("downloads lock").remove(&id);
         }
@@ -297,10 +282,12 @@ pub async fn start_session(
     }
     let settings = state.settings();
     let models_dir = state.models_dir.clone();
+    let bundled_dir = state.bundled_dir.clone();
     let store = state.store();
     let sink = Arc::new(app.clone());
     let running =
-        blocking(move || engine::start(&settings, title, &models_dir, &store, sink)).await?;
+        blocking(move || engine::start(&settings, title, &models_dir, &bundled_dir, &store, sink))
+            .await?;
     let meta = running.meta.clone();
     let mut slot = state.running.lock().expect("running lock");
     if slot.is_some() {

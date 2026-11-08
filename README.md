@@ -19,11 +19,13 @@
 
 | 용도 | 로컬 | 사용자 지정 |
 |---|---|---|
-| 음성 인식 | sherpa-onnx Whisper(base, small, medium) + Silero VAD | `POST {주소}/audio/transcriptions` |
-| 화자 구분 | sherpa-onnx 화자 임베딩 + 온라인 군집 | – |
+| 음성 인식 | sherpa-onnx Whisper(base, small, medium, turbo) + Silero VAD | `POST {주소}/audio/transcriptions` |
+| 화자 구분 | sherpa-onnx CAM++ 화자 임베딩 + 온라인 군집 | – |
 | 번역 | llama.cpp + Qwen2.5 Instruct(1.5B, 3B) | `POST {주소}/chat/completions` |
 
-로컬 모델은 설정 화면에서 처음 한 번 내려받는다. 저장 위치는 앱 데이터 폴더의 `models`이다.
+Silero VAD와 CAM++(약 29 MB)는 설치 파일에 들어 있다(`src-tauri/resources/models`, 출처와 라이선스는 그 폴더의 `NOTICE.md`). 앱은 쓰기 전에 SHA-256을 확인한다. 저장소에 파일을 그대로 넣은 이유: MIT·Apache-2.0이라 재배포가 되고, 크기가 작으며, 개발·CI·설치 파일 빌드가 내려받기 없이 같은 파일을 쓴다.
+
+Whisper와 번역 모델은 설정 화면에서 처음 한 번 내려받는다. 저장 위치는 앱 데이터 폴더의 `models`이다. 파일마다 주소 목록을 차례로 시도하고 크기와 SHA-256을 확인한다.
 
 ## 설치와 실행(개발)
 

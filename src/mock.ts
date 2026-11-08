@@ -36,8 +36,6 @@ const models: ModelInfo[] = [
   { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 150 * MB, note: "빠름, 정확도 보통", installed: true },
   { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 480 * MB, note: "대부분의 노트북에 맞음", installed: !flags.has("nomodel") },
   { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 1.5 * 1024 * MB, note: "정확도 높음, 느린 컴퓨터는 지연됨", installed: false },
-  { id: "silero-vad", kind: "vad", name: "음성 구간 감지(Silero VAD)", size_bytes: 2 * MB, note: "말하는 구간만 골라냄", installed: true },
-  { id: "spk-embed", kind: "speakerembedding", name: "화자 구분 모델", size_bytes: 28 * MB, note: "목소리로 화자를 나눔", installed: true },
   { id: "qwen2.5-3b-instruct-q4", kind: "translation", name: "Qwen2.5 3B", size_bytes: 2 * 1024 * MB, note: "가볍고 빠름", installed: true },
   { id: "qwen2.5-7b-instruct-q4", kind: "translation", name: "Qwen2.5 7B", size_bytes: 4.7 * 1024 * MB, note: "번역 품질 높음, 메모리 8GB 이상", installed: false },
 ];

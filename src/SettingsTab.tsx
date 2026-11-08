@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: "set-translate", label: "번역" },
   { id: "set-input", label: "소리 입력" },
   { id: "set-save", label: "저장" },
+  { id: "set-about", label: "정보" },
 ];
 
 const THEMES: { value: ThemeSetting; label: string }[] = [
@@ -340,7 +341,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
 
 export function SettingsTab({ active }: { active: boolean }) {
   const app = useApp();
-  const { settings, models, mics, systemAudio, saveState, settingsTarget } = app;
+  const { settings, mics, systemAudio, saveState, settingsTarget } = app;
   const body = useRef<HTMLDivElement>(null);
   const [current, setCurrent] = useState(SECTIONS[0].id);
 
@@ -367,7 +368,6 @@ export function SettingsTab({ active }: { active: boolean }) {
   };
 
   if (!settings) return <div className="panel"><p className="empty-load">설정을 불러오는 중…</p></div>;
-  const helpers = models.filter((m) => m.kind === "vad" || m.kind === "speakerembedding");
   const langs = TARGET_LANGUAGES.includes(settings.target_language)
     ? TARGET_LANGUAGES
     : [settings.target_language, ...TARGET_LANGUAGES];
@@ -434,13 +434,6 @@ export function SettingsTab({ active }: { active: boolean }) {
                 목소리로 화자 나누기
               </Switch>
               <span className="fhint">마이크와 시스템 소리 모두 목소리로 화자를 나눕니다(화자 1, 2, …).</span>
-              {helpers.length > 0 && (
-                <div>
-                  {helpers.map((m) => (
-                    <ModelRow key={m.id} model={m} />
-                  ))}
-                </div>
-              )}
             </div>
           </section>
 
@@ -488,6 +481,17 @@ export function SettingsTab({ active }: { active: boolean }) {
                 <span className="inp mono">{settings.sessions_dir ?? "문서/morago/sessions"}</span>
               </div>
               <span className="fhint">회의를 중지하면 이 폴더에 원문과 번역이 저장됩니다.</span>
+            </div>
+          </section>
+
+          <section className="grp" id="set-about" aria-labelledby="h-about">
+            <h2 id="h-about">정보</h2>
+            <div className="card">
+              <span className="fhint">앱에 들어 있는 모델과 라이선스</span>
+              <ul className="notice-list">
+                <li translate="no">Silero VAD: MIT License, Copyright (c) 2020-present Silero Team</li>
+                <li translate="no">CAM++ speaker embedding (3D-Speaker): Apache License 2.0</li>
+              </ul>
             </div>
           </section>
         </div>
