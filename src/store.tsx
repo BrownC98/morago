@@ -109,6 +109,15 @@ function upsert(list: Utterance[], u: Utterance): Utterance[] {
   return next;
 }
 
+/** Removes the partial line of `source` if its speech started before `endMs`. */
+function dropPartial(p: App["partials"], source: SourceKind, endMs: number): App["partials"] {
+  const line = p[source];
+  if (!line || line.start_ms >= endMs) return p;
+  const n = { ...p };
+  delete n[source];
+  return n;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [tab, setTab] = useState<Tab>("live");
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -163,12 +172,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const unsubs = [
       onEvent("utterance", (u) => {
         setUtterances((l) => upsert(l, u));
-        setPartials((p) => {
-          if (!p[u.source]) return p;
-          const n = { ...p };
-          delete n[u.source];
-          return n;
-        });
+        // Only the utterance of that speech replaces the line, not a later update of an older one.
+        setPartials((p) => dropPartial(p, u.source, u.end_ms));
         // A fresh result from a stage clears that stage's error.
         setEngineErrors((e) => {
           const clearAsr = "asr" in e;
@@ -180,7 +185,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return n;
         });
       }),
-      onEvent("utterance-partial", (p) => setPartials((x) => ({ ...x, [p.source]: p }))),
+      onEvent("utterance-partial", (p) =>
+        setPartials((x) => (p.text ? { ...x, [p.source]: p } : dropPartial(x, p.source, p.start_ms))),
+      ),
       onEvent("audio-level", (p) => setLevels((l) => ({ ...l, [p.source]: p.rms }))),
       onEvent("session-state", (p) => {
         setRunning(p.running);

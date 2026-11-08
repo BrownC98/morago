@@ -153,6 +153,7 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
     if let TranslateConfig::Custom {
         endpoint,
         extra_body,
+        ..
     } = &settings.translate
     {
         check_base_url(&endpoint.base_url)?;

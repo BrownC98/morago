@@ -29,7 +29,15 @@ pub enum TranslateConfig {
         /// Passes `translate::check_extra_body_map`.
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         extra_body: Map<String, Value>,
+        /// Least time between two partial translation requests of one speech
+        /// (500..=10000 ms). `None` (`null`) = no partial requests ("끔").
+        partial_interval_ms: Option<u32>,
     },
+}
+
+/// A file without the field (from before it) gets 1.5 s.
+fn default_partial_interval_ms() -> Option<u32> {
+    Some(1500)
 }
 
 /// The stored form, also of files from before `extra_body`.
@@ -46,6 +54,8 @@ enum RawTranslateConfig {
         /// Old field; read only, moved into `extra_body` like `endpoint.model`.
         #[serde(default)]
         reasoning_effort: Option<String>,
+        #[serde(default = "default_partial_interval_ms")]
+        partial_interval_ms: Option<u32>,
     },
 }
 
@@ -57,6 +67,7 @@ impl From<RawTranslateConfig> for TranslateConfig {
                 mut endpoint,
                 mut extra_body,
                 reasoning_effort,
+                partial_interval_ms,
             } => {
                 if let Some(effort) = reasoning_effort {
                     extra_body
@@ -70,6 +81,7 @@ impl From<RawTranslateConfig> for TranslateConfig {
                 Self::Custom {
                     endpoint,
                     extra_body,
+                    partial_interval_ms,
                 }
             }
         }
@@ -245,8 +257,32 @@ mod tests {
                     model: String::new(),
                 },
                 extra_body: extra_body.as_object().unwrap().clone(),
+                partial_interval_ms: Some(1500),
             },
             ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn partial_interval_round_trip_and_off_is_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (interval, text) in [(Some(2500), "2500"), (None, "null")] {
+            let mut s = translate_custom(serde_json::json!({}));
+            if let TranslateConfig::Custom {
+                partial_interval_ms,
+                ..
+            } = &mut s.translate
+            {
+                *partial_interval_ms = interval;
+            }
+            save(&path, &s).unwrap();
+            let file = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                file.contains(&format!("\"partial_interval_ms\": {text}")),
+                "{file}"
+            );
+            assert_eq!(load(&path).unwrap(), s);
         }
     }
 
@@ -273,6 +309,7 @@ mod tests {
             "kind": "custom",
             "endpoint": {"base_url": "http://localhost:8000/v1", "model": ""},
             "extra_body": extra_body,
+            "partial_interval_ms": 1500,
         })
     }
 

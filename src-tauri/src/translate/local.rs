@@ -28,6 +28,12 @@ fn backend() -> anyhow::Result<&'static LlamaBackend> {
         .map_err(|e| anyhow!("번역 엔진을 시작하지 못했습니다: {e}"))
 }
 
+/// True when the model runs all layers on a GPU: macOS (Metal). Other builds
+/// have no GPU backend.
+pub(crate) fn on_gpu() -> bool {
+    cfg!(target_os = "macos")
+}
+
 pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
@@ -45,8 +51,7 @@ impl LocalTranslator {
             ));
         }
         let backend = backend()?;
-        // All layers to the GPU on macOS (Metal). Other builds have no GPU backend.
-        let gpu_layers = if cfg!(target_os = "macos") { 999 } else { 0 };
+        let gpu_layers = if on_gpu() { 999 } else { 0 };
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
         let model = LlamaModel::load_from_file(backend, &path, &params)
             .map_err(|e| anyhow!("번역 모델을 읽지 못했습니다 ({model_id}): {e}"))?;
@@ -61,7 +66,13 @@ impl LocalTranslator {
         })
     }
 
-    fn generate(&self, system: &str, text: &str) -> anyhow::Result<String> {
+    /// Stops with an error before the next token when `stop` returns true.
+    fn generate(
+        &self,
+        system: &str,
+        text: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
         let backend = backend()?;
         let prompt = gemma4_prompt(system, text);
         let vocab = self.model.vocab();
@@ -88,6 +99,9 @@ impl LocalTranslator {
         let mut sampler = LlamaSampler::greedy();
         let mut bytes = Vec::new();
         for pos in (i32::try_from(prompt_tokens.len())?..).take(max_new) {
+            if stop() {
+                return Err(anyhow!("stopped"));
+            }
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             if vocab.is_eog(token) || pos >= i32::try_from(n_ctx)? {
                 break;
@@ -99,6 +113,21 @@ impl LocalTranslator {
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+
+    fn run(
+        &self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        let system = system_prompt(source_language, target_language, &self.history);
+        let translation = clean_output(&self.generate(&system, text, stop)?, text);
+        if translation.is_empty() {
+            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
+        }
+        Ok(translation)
+    }
 }
 
 impl Translator for LocalTranslator {
@@ -109,14 +138,20 @@ impl Translator for LocalTranslator {
         target_language: &str,
     ) -> anyhow::Result<String> {
         self.history.set_target(target_language);
-        let system = system_prompt(source_language, target_language, &self.history);
-        let raw = self.generate(&system, text)?;
-        let translation = clean_output(&raw, text);
-        if translation.is_empty() {
-            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
-        }
+        let translation = self.run(text, source_language, target_language, &|| false)?;
         self.history.push(text);
         Ok(translation)
+    }
+
+    /// Uses the history as context but does not change it.
+    fn translate_partial(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        self.run(text, source_language, target_language, stop)
     }
 
     fn label(&self) -> String {

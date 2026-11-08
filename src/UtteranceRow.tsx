@@ -36,7 +36,7 @@ export const UtteranceRow = memo(function UtteranceRow({
   );
 });
 
-/** Live text of speech that has not ended. Grey; replaced by the utterance when it ends. */
+/** Live text and provisional translation of speech that has not ended. Grey; replaced by the utterance when it ends. */
 export function PartialRow({ p }: { p: PartialText }) {
   return (
     <article className="utt partial">
@@ -47,6 +47,7 @@ export function PartialRow({ p }: { p: PartialText }) {
       </div>
       <div className="txt">
         <p className="orig">{p.text}</p>
+        {p.translation && <p className="tr">{p.translation}</p>}
       </div>
     </article>
   );

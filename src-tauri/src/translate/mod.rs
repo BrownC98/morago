@@ -9,6 +9,7 @@ mod custom;
 mod local;
 
 pub use custom::{check_extra_body, check_extra_body_map};
+pub(crate) use local::on_gpu as local_on_gpu;
 
 use crate::settings::TranslateConfig;
 use std::collections::VecDeque;
@@ -22,6 +23,16 @@ pub trait Translator: Send {
         text: &str,
         source_language: Option<&str>,
         target_language: &str,
+    ) -> anyhow::Result<String>;
+    /// Translates live partial text. Never changes the context history.
+    /// Returns an error soon after `stop` returns true (a final utterance
+    /// waits, or the speech ended).
+    fn translate_partial(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String>;
     /// Label for the UI and session meta, for example "로컬 Gemma 4 E2B".
     fn label(&self) -> String;
@@ -45,6 +56,7 @@ pub fn build_translator(
         TranslateConfig::Custom {
             endpoint,
             extra_body,
+            ..
         } => {
             custom::required_model(extra_body)?;
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
@@ -238,6 +250,7 @@ mod tests {
                     model: String::new(),
                 },
                 extra_body: extra.as_object().unwrap().clone(),
+                partial_interval_ms: None,
             };
             let err = build_translator(&config, Path::new("")).err().unwrap();
             assert_eq!(

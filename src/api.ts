@@ -53,11 +53,13 @@ export interface Endpoint {
 /**
  * `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has
  * `extra_body` (absent = `{}`): its `model` is the translation model, and the
- * translate `endpoint.model` is always "".
+ * translate `endpoint.model` is always "". Only translate has `partial_interval_ms`
+ * (least time between two partial translation requests of one speech; null = off,
+ * absent = 1500).
  */
 export type ProviderConfig =
   | { kind: "local"; model_id: string }
-  | { kind: "custom"; endpoint: Endpoint; extra_body?: Record<string, unknown> };
+  | { kind: "custom"; endpoint: Endpoint; extra_body?: Record<string, unknown>; partial_interval_ms?: number | null };
 
 export type ThemeSetting = "light" | "dark" | "system";
 
@@ -98,7 +100,10 @@ export type EngineStage = "capture" | "asr" | "translate" | "store" | "model" | 
 export interface PartialText {
   source: SourceKind;
   start_ms: number;
+  /** Empty: remove the line of a speech that started before `start_ms`. */
   text: string;
+  /** Provisional translation; it can be of an older, shorter `text`. */
+  translation: string | null;
 }
 
 export interface EventMap {

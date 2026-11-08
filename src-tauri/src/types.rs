@@ -127,14 +127,16 @@ pub struct DownloadProgress {
     pub total_bytes: Option<u64>,
 }
 
-/// Live text of speech that has not ended yet (streaming ASR, follow-up
-/// "live mode"). The UI shows one partial line per source and removes it
-/// when an `Utterance` of the same source arrives. The VAD + Whisper
-/// pipeline does not send it.
-#[allow(dead_code)] // Reserved for the follow-up live mode (human decision 2026-11-08).
+/// Live text of speech that has not ended yet. The UI shows one partial line
+/// per source and removes it when the `Utterance` of that speech arrives
+/// (`end_ms > start_ms`). An empty `text` removes the line of a speech that
+/// ended before `start_ms` and has no utterance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PartialText {
     pub source: SourceKind,
     pub start_ms: u64,
     pub text: String,
+    /// Provisional translation of the newest partial text that the translator
+    /// finished; it can be of an older, shorter `text`.
+    pub translation: Option<String>,
 }

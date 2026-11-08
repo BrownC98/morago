@@ -285,6 +285,36 @@ function ExtraBodyField({
   );
 }
 
+/** `partial_interval_ms`: off, then 0.5 s to 10 s in 0.5 s steps. */
+const INTERVALS: { value: string; label: string }[] = [
+  { value: "off", label: "끔" },
+  ...Array.from({ length: 20 }, (_, i) => {
+    const ms = (i + 1) * 500;
+    return { value: String(ms), label: `${ms / 1000}초${ms === 1500 ? "(기본값)" : ""}` };
+  }),
+];
+
+/** `partial_interval_ms` of a custom translation server. */
+function IntervalField({ interval, onInterval }: { interval?: number | null; onInterval: (ms: number | null) => void }) {
+  return (
+    <>
+      <span className="flab" aria-hidden="true">중간 번역 간격</span>
+      <Select
+        label="중간 번역 간격"
+        width={260}
+        value={interval === null ? "off" : String(interval ?? 1500)}
+        onChange={(v) => onInterval(v === "off" ? null : Number(v))}
+        options={INTERVALS}
+      />
+      <span />
+      <p className="fhint">
+        말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다. 간격이 짧을수록 요청이 많아져 요금이
+        늘어납니다.
+      </p>
+    </>
+  );
+}
+
 /** Address, key and test of a custom service. ASR has a 모델 row; `children` go after it. */
 function EndpointForm({
   role,
@@ -383,18 +413,25 @@ function ProviderCard({ role }: { role: KeyRole }) {
   const lastExtra = useRef<ExtraBody | undefined>(undefined);
   // The typed text, also when it is not valid and so not saved.
   const extraText = useRef<string | null>(null);
+  const lastInterval = useRef<number | null | undefined>(undefined);
   const lastLocal = useRef<string | null>(null);
   if (cfg?.kind === "custom") {
     lastEndpoint.current = cfg.endpoint;
     lastExtra.current = cfg.extra_body;
+    lastInterval.current = cfg.partial_interval_ms;
   }
   if (cfg?.kind === "local") lastLocal.current = cfg.model_id;
   if (!cfg) return null;
   const set = (c: ProviderConfig) => updateSettings(role === "asr" ? { asr: c } : { translate: c });
   // An empty `extra_body` is the absent key, as in the settings file.
-  const custom = (endpoint: Endpoint, extra?: ExtraBody): ProviderConfig =>
-    role === "translate" && extra && Object.keys(extra).length > 0
-      ? { kind: "custom", endpoint, extra_body: extra }
+  const custom = (endpoint: Endpoint, extra: ExtraBody | undefined, interval: number | null | undefined): ProviderConfig =>
+    role === "translate"
+      ? {
+          kind: "custom",
+          endpoint,
+          ...(extra && Object.keys(extra).length > 0 ? { extra_body: extra } : {}),
+          partial_interval_ms: interval,
+        }
       : { kind: "custom", endpoint };
 
   return (
@@ -403,7 +440,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom") set(custom(lastEndpoint.current, lastExtra.current));
+          if (k === "custom") set(custom(lastEndpoint.current, lastExtra.current, lastInterval.current));
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
@@ -425,14 +462,24 @@ function ProviderCard({ role }: { role: KeyRole }) {
         </div>
       ) : (
         <>
-          <EndpointForm role={role} endpoint={cfg.endpoint} onCommit={(endpoint) => set(custom(endpoint, cfg.extra_body))}>
+          <EndpointForm
+            role={role}
+            endpoint={cfg.endpoint}
+            onCommit={(endpoint) => set(custom(endpoint, cfg.extra_body, cfg.partial_interval_ms))}
+          >
             {role === "translate" && (
-              <ExtraBodyField
-                initial={extraText.current ?? extraBodyText(cfg.extra_body)}
-                saved={cfg.extra_body}
-                onText={(t) => (extraText.current = t)}
-                onCommit={(body) => set(custom(cfg.endpoint, body))}
-              />
+              <>
+                <ExtraBodyField
+                  initial={extraText.current ?? extraBodyText(cfg.extra_body)}
+                  saved={cfg.extra_body}
+                  onText={(t) => (extraText.current = t)}
+                  onCommit={(body) => set(custom(cfg.endpoint, body, cfg.partial_interval_ms))}
+                />
+                <IntervalField
+                  interval={cfg.partial_interval_ms}
+                  onInterval={(ms) => set(custom(cfg.endpoint, cfg.extra_body, ms))}
+                />
+              </>
             )}
           </EndpointForm>
           <span className="fhint">
