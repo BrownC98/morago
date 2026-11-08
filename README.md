@@ -37,10 +37,14 @@ Whisper와 번역 모델은 설정 화면에서 처음 한 번 내려받는다. 
 
 ```bash
 pnpm install
-pnpm tauri dev          # 개발 모드로 앱 실행
+LLAMA_LIB_PROFILE=Release pnpm tauri dev   # 개발 모드로 앱 실행(llama.cpp는 릴리스로: 디버그는 번역이 약 10배 느리다)
 pnpm tauri build        # 설치 파일 만들기(src-tauri/target/release/bundle)
 scripts/gate/check.sh   # 이 커밋의 Windows·macOS CI 결과를 기다려 확인
 ```
+
+Linux는 대상이 아니다. Linux에서는 sherpa-onnx(onnxruntime)와 llama.cpp를 한 프로세스에 함께 넣으면 첫 음성 인식 호출에서 프로세스가 멈춘다(std::regex 충돌, 2026-11-08 확인). Windows·macOS에서는 CI 종단 시험이 통과한다.
+
+종단 시험(실제 모델: VAD, Whisper base, CAM++, Gemma 4 E2B)은 수동 CI 실행의 `e2e` 잡이 Windows·macOS에서 돌린다. 소리 장치 시험은 [docs/manual-audio-test.md](docs/manual-audio-test.md)의 순서로 실제 기기에서 한다.
 
 GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 검사(rustfmt, clippy, 테스트)를 돌린다. 설치 파일(Windows NSIS, macOS dmg)은 `v*` 태그와 수동 실행(`gh workflow run ci.yml --ref <브랜치>`)에서만 만든다. 서명하지 않은 빌드이므로 macOS에서는 처음 열 때 Finder에서 오른쪽 클릭 → 열기를 쓴다.
 
@@ -50,9 +54,17 @@ GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 
 2. 회의 탭에서 번역할 언어를 고르고 [회의 시작]을 누른다.
 3. [중지하고 저장]을 누르면 기록 탭에 저장된다. 기록에서 화자 이름을 바꾸고 파일로 내보낸다.
 
+## 내보내기
+
+기록 탭에서 Markdown(`.md`), SRT 자막(`.srt`), JSON(`.json`)으로 내보낸다. 셋 다 화자 이름, 시작·끝 시각, 원문, 번역을 담는다.
+
 ## 저장 형식
 
-회의 하나는 `문서/morago/sessions/<id>/` 폴더이다. 설정에서 위치를 바꿀 수 있다.
+회의 하나는 `문서/morago/sessions/<id>/` 폴더이다.
 
 - `meta.json`: 제목, 시작·끝 시각, 번역 언어, 모델 이름, 화자 이름.
 - `utterances.jsonl`: 발화 한 줄에 하나(화자, 시각, 언어, 원문, 번역). 번역이 끝나면 같은 id의 줄을 덧붙인다. 앱이 갑자기 꺼져도 마지막 줄까지 남는다.
+
+## 라이선스
+
+앱에 든 모델(Silero VAD: MIT, CAM++: Apache-2.0)과 내려받는 모델(Gemma 4: Apache-2.0, Whisper: MIT)의 출처는 `src-tauri/resources/models/NOTICE.md`와 앱의 설정 › 정보에 있다.
