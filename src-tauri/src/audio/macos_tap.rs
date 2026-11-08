@@ -571,5 +571,6 @@ mod tests {
             .filter(|l| l.contains("(undefined)") && !l.contains("weak"))
             .collect();
         assert!(strong.is_empty(), "strong imports: {strong:#?}");
+        panic!("DIAGNOSTIC nm lines: {lines:#?}");
     }
 }
