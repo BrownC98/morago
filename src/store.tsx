@@ -250,7 +250,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.saveSettings(next).then(
           () => {
             setSaveState(settingsRef.current === next ? "saved" : "saving");
-            if ("gpu" in patch || "translate" in patch) refreshGpu();
+            if ("gpu" in patch || "translate" in patch || "asr" in patch) refreshGpu();
           },
           (e) => {
             setSaveState("error");

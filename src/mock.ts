@@ -55,6 +55,7 @@ function gpuStatus(): GpuStatus {
           : pack.restart
             ? `앱을 다시 시작하면 ${chosen}를 씁니다.`
             : `${chosen} · CUDA`;
+  const asr = settings.asr;
   return {
     gpus,
     hint: "GPU 가속은 NVIDIA GPU(CUDA)만 씁니다.",
@@ -66,9 +67,15 @@ function gpuStatus(): GpuStatus {
             size_bytes: pack.size_bytes,
             installed: pack.installed,
             needs_restart: pack.restart,
-            note: "NVIDIA GPU에서 번역하는 CUDA 런타임입니다. NVIDIA 서버에서 내려받고, 풀면 0.7 GB입니다. NVIDIA 드라이버 528.33 이상(RTX 50 시리즈는 570.65 이상)이 필요합니다.",
+            note: "NVIDIA GPU에서 음성 인식과 번역을 돌리는 CUDA 런타임입니다. NVIDIA 서버에서 내려받고, 풀면 0.7 GB입니다. NVIDIA 드라이버 528.33 이상(RTX 50 시리즈는 570.65 이상)이 필요합니다.",
           },
     translate: local ? { gpu: onGpu, detail } : null,
+    asr:
+      asr.kind !== "local"
+        ? null
+        : asr.model_id.startsWith("whisper-")
+          ? { gpu: onGpu, detail }
+          : { gpu: false, detail: "이 모델은 CPU에서만 돌립니다." },
   };
 }
 

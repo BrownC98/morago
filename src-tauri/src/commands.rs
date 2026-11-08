@@ -217,10 +217,12 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
     let result = blocking(move || -> anyhow::Result<String> {
         match role {
             Role::Asr => {
+                let placement = engine::place_models(&settings, &models_dir)?.asr;
                 let mut asr = speech::build_asr(
                     &settings.asr,
                     settings.meeting_language.as_deref(),
                     &models_dir,
+                    &placement.unwrap_or_else(|| gpu::Placement::cpu("")),
                 )?;
                 // One second of silence: checks the address, key and model name.
                 let seg = SpeechSegment {
@@ -233,9 +235,12 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
                 Ok(format!("{}: 연결되었습니다.", asr.label()))
             }
             Role::Translate => {
-                let placement = engine::translate_placement(&settings, &models_dir)?;
-                let mut t =
-                    translate::build_translator(&settings.translate, &models_dir, &placement)?;
+                let placement = engine::place_models(&settings, &models_dir)?.translate;
+                let mut t = translate::build_translator(
+                    &settings.translate,
+                    &models_dir,
+                    &placement.unwrap_or_else(|| gpu::Placement::cpu("")),
+                )?;
                 let out = t.translate("Hello.", Some("en"), &settings.target_language)?;
                 Ok(format!("{}: 연결되었습니다. 시험 번역: {out}", t.label()))
             }
@@ -439,23 +444,22 @@ pub fn stop_after_fault(app: &AppHandle, message: &str) {
     });
 }
 
-/// GPUs, the GPU pack and the device of the translation model: the running
-/// session's device, else the device that the settings give.
+/// GPUs, the GPU pack and the devices of the local models: the running
+/// session's devices, else the devices that the settings give.
 #[tauri::command]
 pub async fn gpu_status(state: State<'_, AppState>) -> CmdResult<gpu::GpuStatus> {
     let settings = state.settings();
     let running = match &*state.session.lock().expect("session lock") {
-        Session::Running(r) => Some(r.translate_device.clone()),
+        Session::Running(r) => Some((r.translate_device.clone(), r.asr_device.clone())),
         _ => None,
     };
     let models_dir = state.models_dir.clone();
     blocking(move || {
-        let bytes = engine::translate_model_bytes(&settings, &models_dir);
-        let mut status = gpu::status(&settings.gpu, bytes);
-        if let Some(device) = running {
-            status.translate = device;
-        }
-        Ok(status)
+        let (translate, asr) = running.unwrap_or_else(|| {
+            let p = engine::model_devices(&settings, &models_dir);
+            (p.translate.map(|p| p.status), p.asr.map(|p| p.status))
+        });
+        Ok(gpu::status(translate, asr))
     })
     .await
 }
