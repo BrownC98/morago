@@ -209,7 +209,12 @@ pub fn start(
             SourceKind::Mic => settings.mic_device.as_deref(),
             SourceKind::System => None,
         };
-        match audio::start(*source, device, t0, audio_tx.clone()) {
+        let on_error: audio::ErrorSink = {
+            let sink = sink.clone();
+            let s = *source;
+            Arc::new(move |m: String| sink.error("capture", Some(s), &m))
+        };
+        match audio::start(*source, device, t0, audio_tx.clone(), on_error) {
             Ok(c) => captures.push(c),
             Err(e) => {
                 sink.error("capture", Some(*source), &e.to_string());

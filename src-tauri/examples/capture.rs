@@ -35,7 +35,8 @@ fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = crossbeam_channel::bounded(256);
     let t0 = Instant::now();
-    let capture = audio::start(source, None, t0, tx)?;
+    let on_error: audio::ErrorSink = std::sync::Arc::new(|m| println!("[capture] {m}"));
+    let capture = audio::start(source, None, t0, tx, on_error)?;
     println!("recording {secs} s ...");
 
     let spec = hound::WavSpec {
