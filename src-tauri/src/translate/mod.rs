@@ -21,6 +21,16 @@ pub trait Translator: Send {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String>;
+    /// Translates live partial text. Never changes the context history.
+    /// Returns an error soon after `stop` returns true (a final utterance
+    /// waits, or the speech ended).
+    fn translate_partial(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String>;
     /// Label for the UI and session meta, for example "로컬 Gemma 4 E2B".
     fn label(&self) -> String;
     /// A one-time message for the user that is not an error of the last call.
@@ -43,6 +53,7 @@ pub fn build_translator(
         TranslateConfig::Custom {
             endpoint,
             reasoning_effort,
+            ..
         } => {
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
             Ok(Box::new(custom::CustomTranslator::new(
