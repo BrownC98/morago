@@ -43,6 +43,7 @@ const STAGE_NAME: Record<EngineStage, string> = {
   store: "저장",
   model: "모델",
   notice: "알림",
+  session: "회의",
 };
 
 export function LiveTab({ active }: { active: boolean }) {
@@ -102,6 +103,9 @@ export function LiveTab({ active }: { active: boolean }) {
 
   const asrLabel = running && meta ? meta.asr_label : providerLabel(settings.asr, models);
   const trLabel = running && meta ? meta.translator_label : providerLabel(settings.translate, models);
+  // Local speech recognition runs on the CPU; the core gives the translation device.
+  const asrLocal = running && meta ? meta.asr_label.startsWith("로컬") : settings.asr.kind === "local";
+  const trDevice = app.gpu?.translate ? (app.gpu.translate.gpu ? " · GPU" : " · CPU") : "";
   const otherErrors = (["capture", "store", "model"] as const).filter((s) => engineErrors[s]);
   const idle = !running && utterances.length === 0;
 
@@ -179,6 +183,11 @@ export function LiveTab({ active }: { active: boolean }) {
             role="log"
             tabIndex={0}
           >
+            {!running && app.sessionNotice && (
+              <div className="notice" role="alert">
+                <span>{app.sessionNotice}</span>
+              </div>
+            )}
             {!running &&
               missing.map((m) => (
                 <div className="notice" key={m.section}>
@@ -224,11 +233,13 @@ export function LiveTab({ active }: { active: boolean }) {
         <span className="bi">
           <span className={engineErrors.asr ? "dot bad" : "dot"} aria-hidden="true" />
           음성 인식: {asrLabel}
+          {asrLocal && " · CPU"}
           {engineErrors.asr && <span className="berr" title={engineErrors.asr}> · {engineErrors.asr}</span>}
         </span>
         <span className="bi">
           <span className={engineErrors.translate ? "dot bad" : "dot"} aria-hidden="true" />
           번역: {trLabel}
+          {trDevice}
           {engineErrors.translate && <span className="berr" title={engineErrors.translate}> · {engineErrors.translate}</span>}
         </span>
         {otherErrors.map((s) => (

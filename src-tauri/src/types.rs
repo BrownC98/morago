@@ -127,6 +127,28 @@ pub struct DownloadProgress {
     pub total_bytes: Option<u64>,
 }
 
+/// Settings › GPU 가속: where local models run.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GpuSetting {
+    /// The first usable GPU, else the CPU.
+    #[default]
+    Auto,
+    /// Only the GPU with this name, as the driver gives it.
+    Device { name: String },
+    /// Always the CPU.
+    Off,
+}
+
+/// Where a local model runs, for the settings rows and the status bar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelDevice {
+    /// True: a GPU. False: the CPU.
+    pub gpu: bool,
+    /// For the user: the GPU and its backend, or why the CPU is used.
+    pub detail: String,
+}
+
 /// Live text of speech that has not ended yet (streaming ASR, follow-up
 /// "live mode"). The UI shows one partial line per source and removes it
 /// when an `Utterance` of the same source arrives. The VAD + Whisper

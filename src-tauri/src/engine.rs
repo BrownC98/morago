@@ -2,12 +2,13 @@
 //! -> storage -> UI events. Each stage runs on its own thread and the
 //! stages talk through channels, so a slow stage does not stop capture.
 
+use crate::gpu::{self, GpuFailure, Placement};
 use crate::settings::{AsrConfig, Settings, TranslateConfig};
 use crate::speech::{self, Diarizer, Vad};
 use crate::store::{SessionStore, SessionWriter};
 use crate::translate::{self, needs_translation};
 use crate::types::{
-    AudioChunk, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
+    AudioChunk, ModelDevice, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
     TranslationState, Utterance,
 };
 use crate::{audio, models};
@@ -25,6 +26,8 @@ pub trait Sink: Send + Sync + 'static {
     fn utterance(&self, u: &Utterance);
     fn level(&self, source: SourceKind, rms: f32);
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str);
+    /// The session cannot go on (a GPU failure): stop and save it, then tell the user.
+    fn fault(&self, message: &str);
     /// Streaming ASR only (follow-up live mode). Kept as the ready interface
     /// (human decision 2026-11-08); nothing calls it yet.
     #[allow(dead_code)]
@@ -67,12 +70,18 @@ impl Sink for AppHandle {
             },
         );
     }
+    fn fault(&self, message: &str) {
+        log::error!("engine fault: {message}");
+        crate::commands::stop_after_fault(self, message);
+    }
 }
 
 /// A running session.
 pub struct Running {
     pub meta: SessionMeta,
     pub target_language: Arc<RwLock<String>>,
+    /// Device of a local translation model.
+    pub translate_device: Option<ModelDevice>,
     captures: Vec<audio::Capture>,
     audio_tx: Option<Sender<AudioChunk>>,
     threads: Vec<JoinHandle<()>>,
@@ -119,6 +128,29 @@ struct Pipeline {
     audio_tx: Sender<AudioChunk>,
     threads: Vec<JoinHandle<()>>,
     writer: Arc<Mutex<Option<SessionWriter>>>,
+    translate_device: Option<ModelDevice>,
+}
+
+/// Size of the local translation model (the catalog size before download).
+pub fn translate_model_bytes(settings: &Settings, models_dir: &Path) -> Option<u64> {
+    let TranslateConfig::Local { model_id } = &settings.translate else {
+        return None;
+    };
+    let path = models_dir.join(model_id).join("model.gguf");
+    std::fs::metadata(&path).map(|m| m.len()).ok().or_else(|| {
+        models::catalog()
+            .into_iter()
+            .find(|m| &m.id == model_id)
+            .map(|m| m.size_bytes)
+    })
+}
+
+/// Device of the translation model: the GPU setting for a local model.
+pub fn translate_placement(settings: &Settings, models_dir: &Path) -> anyhow::Result<Placement> {
+    match translate_model_bytes(settings, models_dir) {
+        Some(bytes) => gpu::place(&settings.gpu, bytes),
+        None => Ok(Placement::cpu("")),
+    }
 }
 
 /// Loads the models, creates the session file and starts the stage threads.
@@ -135,7 +167,10 @@ fn start_pipeline(
         settings.meeting_language.as_deref(),
         models_dir,
     )?;
-    let translator = translate::build_translator(&settings.translate, models_dir)?;
+    let placement = translate_placement(settings, models_dir)?;
+    let translator = translate::build_translator(&settings.translate, models_dir, &placement)?;
+    let translate_device =
+        matches!(settings.translate, TranslateConfig::Local { .. }).then_some(placement.status);
     models::verify_bundled(bundled_dir)?;
     let diarizer = if settings.diarize {
         Some(Diarizer::new(bundled_dir)?)
@@ -197,6 +232,7 @@ fn start_pipeline(
         audio_tx,
         threads,
         writer,
+        translate_device,
     })
 }
 
@@ -229,6 +265,7 @@ pub fn start(
         audio_tx,
         threads,
         writer,
+        translate_device,
     } = start_pipeline(settings, title, models_dir, bundled_dir, store, &sink)?;
 
     let t0 = Instant::now();
@@ -263,6 +300,7 @@ pub fn start(
     let running = Running {
         meta,
         target_language,
+        translate_device,
         captures,
         audio_tx: Some(audio_tx),
         threads,
@@ -536,10 +574,16 @@ fn translate_loop(
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
 ) {
+    // After a GPU failure the model is not used again; the session stops.
+    let mut gpu_failed = false;
     for mut u in rx.iter() {
         let target_now = target.read().expect("target lock").clone();
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage
+        } else if gpu_failed {
+            TranslationState::Failed {
+                message: "GPU 오류로 번역하지 않았습니다.".into(),
+            }
         } else {
             let result = translator.translate(&u.original, u.language.as_deref(), &target_now);
             if let Some(notice) = translator.take_notice() {
@@ -552,6 +596,13 @@ fn translate_loop(
                     target: target_now,
                     text,
                 },
+                Err(e) if e.is::<GpuFailure>() => {
+                    gpu_failed = true;
+                    sink.fault(&e.to_string());
+                    TranslationState::Failed {
+                        message: e.to_string(),
+                    }
+                }
                 Err(e) => {
                     sink.error("translate", Some(u.source), &e.to_string());
                     TranslationState::Failed {
@@ -663,6 +714,75 @@ mod tests {
                 .unwrap()
                 .push(format!("{stage}: {message}"));
         }
+        fn fault(&self, message: &str) {
+            self.errors
+                .lock()
+                .unwrap()
+                .push(format!("fault: {message}"));
+        }
+    }
+
+    /// Fails with a GPU failure at the second call.
+    struct BrokenGpu {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl translate::Translator for BrokenGpu {
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(format!("번역 {text}"))
+            } else {
+                Err(GpuFailure("GPU 메모리 부족".into()).into())
+            }
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    #[test]
+    fn a_gpu_failure_stops_translation_once_and_keeps_the_originals() {
+        let (tx, rx) = backlog(60_000, utterance_ms);
+        let calls = Arc::new(AtomicU64::new(0));
+        let recorder = Arc::new(Recorder::default());
+        for id in 1..=4 {
+            let u = Utterance {
+                id,
+                source: SourceKind::System,
+                speaker: "S2".into(),
+                start_ms: id * 1000,
+                end_ms: id * 1000 + 500,
+                language: Some("en".into()),
+                original: format!("hello {id}"),
+                translation: TranslationState::Pending,
+            };
+            tx.push(u, &mut |_| {});
+        }
+        drop(tx);
+        translate_loop(
+            rx,
+            Box::new(BrokenGpu {
+                calls: calls.clone(),
+            }),
+            Arc::new(Mutex::new(None)),
+            Arc::new(RwLock::new("ko".into())),
+            recorder.clone(),
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(*recorder.errors.lock().unwrap(), ["fault: GPU 메모리 부족"]);
+        let events = recorder.utterances.lock().unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(matches!(
+            events[0].translation,
+            TranslationState::Done { .. }
+        ));
+        for u in &events[1..] {
+            assert!(
+                matches!(u.translation, TranslationState::Failed { .. }),
+                "{u:?}"
+            );
+        }
+        assert_eq!(events[3].original, "hello 4");
     }
 
     /// End to end without audio devices: speech clips go into the pipeline as
@@ -742,6 +862,7 @@ mod tests {
         let running = Running {
             meta: p.meta.clone(),
             target_language: p.target_language,
+            translate_device: p.translate_device,
             captures: Vec::new(),
             audio_tx: Some(p.audio_tx),
             threads: p.threads,

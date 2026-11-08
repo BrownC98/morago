@@ -5,3 +5,9 @@
 [env]
 LLAMA_STATIC_CRT = "1"
 CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# CUDA (Windows): GPU code for Turing (RTX 20), Ampere (RTX 30), Ada (RTX 40)
+# and Blackwell (RTX 50). Older GPUs run on the CPU. Not CUDAARCHS: ggml sets
+# its own list before CMake reads that. llama-cpp-sys-2 gives CMAKE_* variables
+# to CMake but does not rebuild when they change: run
+# `cargo clean -p llama-cpp-sys-2` after a change.
+CMAKE_CUDA_ARCHITECTURES = "75;86;89;120"

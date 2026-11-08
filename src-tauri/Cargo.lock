@@ -2733,11 +2733,13 @@ dependencies = [
  "chrono",
  "cpal",
  "crossbeam-channel",
+ "dirs",
  "env_logger",
  "hound",
  "keyring-core",
  "linux-keyutils-keyring-store",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "log",
  "objc2",
  "objc2-core-audio",
@@ -2761,6 +2763,7 @@ dependencies = [
  "whisper-rs",
  "windows-native-keyring-store",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

@@ -1,66 +1,89 @@
 //! Local translation with an embedded llama.cpp model.
 
 use super::{History, Translator, clean_output, system_prompt};
+use crate::gpu::{self, GpuFailure, Placement};
 use anyhow::anyhow;
 use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::OnceLock;
 
-/// llama.cpp allows one backend per process.
-fn backend() -> anyhow::Result<&'static LlamaBackend> {
-    static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
-    BACKEND
-        .get_or_init(|| {
-            LlamaBackend::init()
-                .map(|mut backend| {
-                    backend.void_logs();
-                    backend
-                })
-                .map_err(|e| e.to_string())
-        })
-        .as_ref()
-        .map_err(|e| anyhow!("번역 엔진을 시작하지 못했습니다: {e}"))
-}
+/// GPU memory that one translation context needs at most (KV cache and
+/// compute buffers of a short prompt), with a margin.
+const CONTEXT_MEMORY: u64 = 512 * 1024 * 1024;
 
 pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
     threads: i32,
+    /// ggml device index and name when the model is on a GPU.
+    gpu: Option<(usize, String)>,
 }
 
 impl LocalTranslator {
-    /// Loads `<models_dir>/<model_id>/model.gguf` once.
-    pub(crate) fn load(models_dir: &Path, model_id: &str) -> anyhow::Result<Self> {
+    /// Loads `<models_dir>/<model_id>/model.gguf` once, on the device of `placement`.
+    pub(crate) fn load(
+        models_dir: &Path,
+        model_id: &str,
+        placement: &Placement,
+    ) -> anyhow::Result<Self> {
         let path = models_dir.join(model_id).join("model.gguf");
         if !path.is_file() {
             return Err(anyhow!(
                 "번역 모델이 설치되지 않았습니다: {model_id}. 설정에서 모델을 내려받으세요."
             ));
         }
-        let backend = backend()?;
-        // All layers to the GPU on macOS (Metal). Other builds have no GPU backend.
-        let gpu_layers = if cfg!(target_os = "macos") { 999 } else { 0 };
-        let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-        let model = LlamaModel::load_from_file(backend, &path, &params)
-            .map_err(|e| anyhow!("번역 모델을 읽지 못했습니다 ({model_id}): {e}"))?;
+        let backend = gpu::llama_backend()?;
+        // No device: llama.cpp uses no GPU at all, also not for big batches.
+        let devices: Vec<usize> = placement.gpu.iter().map(|(i, _)| *i).collect();
+        let params = LlamaModelParams::default()
+            .with_n_gpu_layers(if devices.is_empty() { 0 } else { 999 })
+            .with_devices(&devices)?;
+        gpu::clear_llama_errors();
+        let model = LlamaModel::load_from_file(backend, &path, &params).map_err(|e| {
+            match &placement.gpu {
+                Some((_, name)) => gpu::load_error(name, &gpu::failure_cause(&e)),
+                None => anyhow!("번역 모델을 읽지 못했습니다 ({model_id}): {e}"),
+            }
+        })?;
         // About the physical cores: more threads than that slow ggml down.
         let threads =
             (std::thread::available_parallelism().map_or(4, |n| n.get()) / 2).clamp(2, 8) as i32;
-        Ok(Self {
+        let translator = Self {
             model,
             label: format!("로컬 {}", crate::models::display_name(model_id)),
             threads,
-        })
+            gpu: placement.gpu.clone(),
+        };
+        if let Some((_, name)) = &placement.gpu {
+            // The first run on a GPU loads its kernels and is slow: do it before the meeting.
+            translator
+                .generate("Translate into Korean.", "Hello.")
+                .map_err(|e| gpu::load_error(name, &e.to_string()))?;
+        }
+        Ok(translator)
+    }
+
+    /// On a GPU a llama.cpp error is a `GpuFailure`: the engine stops the session.
+    fn llama_error<E>(&self, e: E) -> anyhow::Error
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        match &self.gpu {
+            Some(_) => GpuFailure(format!(
+                "번역 모델이 GPU에서 오류를 냈습니다: {}.",
+                gpu::failure_cause(&e)
+            ))
+            .into(),
+            None => e.into(),
+        }
     }
 
     fn generate(&self, system: &str, text: &str) -> anyhow::Result<String> {
-        let backend = backend()?;
+        let backend = gpu::llama_backend()?;
         let prompt = gemma4_prompt(system, text);
         let vocab = self.model.vocab();
         let prompt_tokens = vocab.tokenize(prompt.as_bytes(), true, true);
@@ -71,17 +94,28 @@ impl LocalTranslator {
         if prompt_tokens.len() + 1 >= n_ctx {
             return Err(anyhow!("문장이 너무 길어 번역하지 못했습니다"));
         }
+        if let Some((index, name)) = &self.gpu {
+            // A failed CUDA allocation ends the process: check before the context.
+            let free = gpu::free_memory(*index).unwrap_or(0);
+            if free < CONTEXT_MEMORY {
+                return Err(GpuFailure(format!("{name}의 GPU 메모리가 모자랍니다.")).into());
+            }
+        }
         let n_ctx = u32::try_from(n_ctx)?;
         let params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
             .with_n_batch(n_ctx)
             .with_n_threads(self.threads)
             .with_n_threads_batch(self.threads);
-        let mut ctx = self.model.new_context(backend, params)?;
+        gpu::clear_llama_errors();
+        let mut ctx = self
+            .model
+            .new_context(backend, params)
+            .map_err(|e| self.llama_error(e))?;
 
         let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
         batch.add_sequence(&prompt_tokens, 0, false)?;
-        ctx.decode(&mut batch)?;
+        ctx.decode(&mut batch).map_err(|e| self.llama_error(e))?;
 
         let mut sampler = LlamaSampler::greedy();
         let mut bytes = Vec::new();
@@ -93,7 +127,7 @@ impl LocalTranslator {
             bytes.extend(vocab.token_to_piece(token, false, None));
             batch.clear();
             batch.add(token, pos, &[0], true)?;
-            ctx.decode(&mut batch)?;
+            ctx.decode(&mut batch).map_err(|e| self.llama_error(e))?;
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
@@ -134,6 +168,7 @@ fn gemma4_prompt(system: &str, user: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::GpuSetting;
     use std::time::Instant;
 
     #[test]
@@ -147,7 +182,7 @@ mod tests {
     #[test]
     fn missing_model_gives_korean_error() {
         let dir = std::env::temp_dir().join("morago-no-such-models");
-        let err = LocalTranslator::load(&dir, "gemma-4-e2b-it-q4")
+        let err = LocalTranslator::load(&dir, "gemma-4-e2b-it-q4", &Placement::cpu(""))
             .err()
             .unwrap()
             .to_string();
@@ -169,13 +204,25 @@ mod tests {
     }
 
     /// Run: `LLAMA_LIB_PROFILE=Release cargo test local_model -- --ignored --nocapture`
-    /// (a debug build of llama.cpp is about 10x slower).
+    /// (a debug build of llama.cpp is about 10x slower). `MORAGO_TEST_GPU=off`
+    /// runs on the CPU; else the device follows the 자동 setting.
+    /// The GPU pack comes from the app data folder (`gpu::app_dir`), as in the app.
     #[test]
-    #[ignore = "downloads a 3.3 GB model and runs it on the CPU"]
+    #[ignore = "downloads a 3.3 GB model and runs it"]
     fn local_model_translates() {
+        gpu::init(&gpu::app_dir().unwrap());
         let dir = ensure_model();
+        let setting = match std::env::var("MORAGO_TEST_GPU").as_deref() {
+            Ok("off") => GpuSetting::Off,
+            _ => GpuSetting::Auto,
+        };
+        let size = std::fs::metadata(dir.join(MODEL_ID).join("model.gguf"))
+            .unwrap()
+            .len();
+        let placement = gpu::place(&setting, size).unwrap();
+        println!("device: {:?}", placement.status);
         let model_started = Instant::now();
-        let mut t = LocalTranslator::load(&dir, MODEL_ID).unwrap();
+        let mut t = LocalTranslator::load(&dir, MODEL_ID, &placement).unwrap();
         println!(
             "label: {}; load: {:.1?}",
             t.label(),
@@ -198,11 +245,45 @@ mod tests {
         for (text, from, to) in cases {
             let started = Instant::now();
             let out = t.translate(text, Some(from), to).unwrap();
+            let took = started.elapsed();
+            let tokens = t.model.vocab().tokenize(out.as_bytes(), false, false).len();
             println!(
-                "[{from}->{to}] {text}\n  => {out}\n  ({:.1?})",
-                started.elapsed()
+                "[{from}->{to}] {text}\n  => {out}\n  ({took:.1?}, {tokens} tokens, {:.1} tokens/s with the prompt)",
+                tokens as f64 / took.as_secs_f64()
             );
             assert!(!out.is_empty());
         }
+    }
+
+    /// D2 B without the memory check of `gpu::place`: a model too big for the
+    /// GPU gives an error (the meeting does not start), not an abort.
+    /// Run: `MORAGO_TEST_BIG_GGUF=<12B model.gguf> LLAMA_LIB_PROFILE=Release
+    /// cargo test big_model -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a GPU and a model bigger than its memory"]
+    fn big_model_on_the_gpu_fails_cleanly() {
+        gpu::init(&gpu::app_dir().unwrap());
+        let gguf = std::path::PathBuf::from(std::env::var_os("MORAGO_TEST_BIG_GGUF").unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("big")).unwrap();
+        std::fs::hard_link(&gguf, dir.path().join("big").join("model.gguf")).unwrap();
+        let size = std::fs::metadata(&gguf).unwrap().len();
+        let checked = gpu::place(&GpuSetting::Auto, size).unwrap();
+        println!("place: {:?}", checked.status);
+        assert!(
+            !checked.status.gpu,
+            "the memory check must keep it on the CPU"
+        );
+
+        let forced = gpu::place(&GpuSetting::Auto, 0).unwrap();
+        assert!(forced.status.gpu, "no usable GPU: {:?}", forced.status);
+        let started = Instant::now();
+        let err = LocalTranslator::load(dir.path(), "big", &forced)
+            .err()
+            .unwrap()
+            .to_string();
+        println!("error after {:.1?}: {err}", started.elapsed());
+        assert!(err.contains("불러오지 못했습니다"), "{err}");
+        assert!(err.contains("「끔」"), "{err}");
     }
 }

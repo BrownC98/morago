@@ -8,6 +8,7 @@
 mod custom;
 mod local;
 
+use crate::gpu::Placement;
 use crate::settings::TranslateConfig;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -30,15 +31,17 @@ pub trait Translator: Send {
     }
 }
 
-/// Builds the translator from settings. Local models are in `models_dir`.
+/// Builds the translator from settings. Local models are in `models_dir` and
+/// load on the device of `placement` (`gpu::place`; a custom endpoint ignores it).
 /// A custom endpoint reads its key with `secrets::get_key(Role::Translate, base_url)`.
 pub fn build_translator(
     config: &TranslateConfig,
     models_dir: &Path,
+    placement: &Placement,
 ) -> anyhow::Result<Box<dyn Translator>> {
     match config {
         TranslateConfig::Local { model_id } => Ok(Box::new(local::LocalTranslator::load(
-            models_dir, model_id,
+            models_dir, model_id, placement,
         )?)),
         TranslateConfig::Custom {
             endpoint,
