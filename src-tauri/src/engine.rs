@@ -537,7 +537,11 @@ fn translate_loop(
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage
         } else {
-            match translator.translate(&u.original, u.language.as_deref(), &target_now) {
+            let result = translator.translate(&u.original, u.language.as_deref(), &target_now);
+            if let Some(notice) = translator.take_notice() {
+                sink.error("translate", None, &notice);
+            }
+            match result {
                 Ok(text) => TranslationState::Done {
                     target: target_now,
                     text,

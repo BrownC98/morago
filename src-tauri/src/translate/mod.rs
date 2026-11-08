@@ -3,7 +3,7 @@
 //!
 //! Both providers keep the last two source texts of the session and send them
 //! as context (the model translates only the last one), so the trait needs no
-//! extra method.
+//! extra method for context.
 
 mod custom;
 mod local;
@@ -23,6 +23,11 @@ pub trait Translator: Send {
     ) -> anyhow::Result<String>;
     /// Label for the UI and session meta, for example "로컬 Gemma 4 E2B".
     fn label(&self) -> String;
+    /// A one-time message for the user that is not an error of the last call.
+    /// The engine shows it through the error path. Default: none.
+    fn take_notice(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// Builds the translator from settings. Local models are in `models_dir`.
@@ -35,11 +40,15 @@ pub fn build_translator(
         TranslateConfig::Local { model_id } => Ok(Box::new(local::LocalTranslator::load(
             models_dir, model_id,
         )?)),
-        TranslateConfig::Custom { endpoint } => {
+        TranslateConfig::Custom {
+            endpoint,
+            reasoning_effort,
+        } => {
             let key = crate::secrets::get_key(crate::secrets::Role::Translate, &endpoint.base_url)?;
             Ok(Box::new(custom::CustomTranslator::new(
                 endpoint.clone(),
                 key,
+                *reasoning_effort,
             )?))
         }
     }

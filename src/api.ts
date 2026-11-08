@@ -50,10 +50,13 @@ export interface Endpoint {
   model: string;
 }
 
-/** `AsrConfig` and `TranslateConfig` have the same JSON shape. */
+/** Value of `reasoning_effort` for a custom translation server. Absent = default (not sent). */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
+
+/** `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has `reasoning_effort`. */
 export type ProviderConfig =
   | { kind: "local"; model_id: string }
-  | { kind: "custom"; endpoint: Endpoint };
+  | { kind: "custom"; endpoint: Endpoint; reasoning_effort?: ReasoningEffort };
 
 export type ThemeSetting = "light" | "dark" | "system";
 
