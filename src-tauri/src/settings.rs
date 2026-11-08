@@ -264,6 +264,8 @@ mod tests {
         assert_eq!(load(&path).unwrap(), translate_custom(None));
     }
 
+    /// The ids of the sherpa-onnx Whisper models (before 2026-11-09) are now
+    /// the whisper.cpp models of the same size.
     #[test]
     fn a_file_with_a_whisper_model_keeps_it() {
         let dir = tempfile::tempdir().unwrap();

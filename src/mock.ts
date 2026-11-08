@@ -73,14 +73,14 @@ function gpuStatus(): GpuStatus {
 }
 
 const models: ModelInfo[] = [
-  { id: "sense-voice-small", kind: "asr", name: "SenseVoice Small", size_bytes: 229 * MB, note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7", installed: !flags.has("nomodel") },
-  { id: "qwen3-asr-0.6b", kind: "asr", name: "Qwen3-ASR 0.6B", size_bytes: 941 * MB, note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1", installed: false },
-  { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 153 * MB, note: "빠름, 정확도 낮음", installed: true },
-  { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 358 * MB, note: "SenseVoice보다 느림, 메모리 약 2GB. 오류율 % 한 6.4 · 일 14.4 · 중 12.1 · 영 10.3", installed: false },
-  { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 902 * MB, note: "느림, 정확도 높음", installed: false },
-  { id: "whisper-turbo", kind: "asr", name: "Whisper turbo", size_bytes: 989 * MB, note: "정확도 높음, CPU에서는 실시간보다 느릴 수 있음, 메모리 3GB 이상. 오류율 % 한 6.8", installed: false },
-  { id: "gemma-4-e2b-it-q4", kind: "translation", name: "Gemma 4 E2B", size_bytes: 3.1 * 1024 * MB, note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)", installed: true },
-  { id: "gemma-4-12b-it-q4", kind: "translation", name: "Gemma 4 12B", size_bytes: 6.5 * 1024 * MB, note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)", installed: false },
+  { id: "sense-voice-small", kind: "asr", name: "SenseVoice Small", size_bytes: 229 * MB, note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7", installed: !flags.has("nomodel"), on_disk: !flags.has("nomodel") },
+  { id: "qwen3-asr-0.6b", kind: "asr", name: "Qwen3-ASR 0.6B", size_bytes: 941 * MB, note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1", installed: false, on_disk: false },
+  { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 78 * MB, note: "빠름, 정확도 낮음", installed: true, on_disk: true },
+  { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 252 * MB, note: "SenseVoice보다 느림, 메모리 약 0.6GB. 오류율 % 한 7.5 · 일 12.7 · 중 10.6 · 영 11.2", installed: false, on_disk: true },
+  { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 514 * MB, note: "느림, 정확도 높음", installed: false, on_disk: false },
+  { id: "whisper-turbo", kind: "asr", name: "Whisper turbo", size_bytes: 547 * MB, note: "정확도 높음, CPU에서는 실시간보다 느림, 메모리 약 1GB. 오류율 % 한 7.4 · 일 4.8 · 중 5.3 · 영 9.3", installed: false, on_disk: false },
+  { id: "gemma-4-e2b-it-q4", kind: "translation", name: "Gemma 4 E2B", size_bytes: 3.1 * 1024 * MB, note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)", installed: true, on_disk: true },
+  { id: "gemma-4-12b-it-q4", kind: "translation", name: "Gemma 4 12B", size_bytes: 6.5 * 1024 * MB, note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)", installed: false, on_disk: false },
 ];
 
 const keys = new Map<string, string>();
@@ -262,7 +262,8 @@ function download(id: string) {
       clearInterval(t);
       downloading.delete(id);
       m.installed = true;
-      if (m === pack) pack.restart = true;
+      if ("on_disk" in m) m.on_disk = true;
+      else pack.restart = true;
       emit("model-download-done", { modelId: id, error: null });
     }
   }, 350);
@@ -301,6 +302,12 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
     case "download_model":
       download(String(a.id));
       return delay(undefined);
+    case "delete_model": {
+      if (run) return Promise.reject("회의 중에는 모델을 지울 수 없습니다. 회의를 마친 뒤 지우십시오.");
+      const m = models.find((x) => x.id === a.id);
+      if (m) m.installed = m.on_disk = false;
+      return delay(undefined);
+    }
     case "cancel_download": {
       const t = downloading.get(String(a.id));
       if (t) {

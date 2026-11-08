@@ -87,9 +87,13 @@ pub const SENSE_VOICE_FILE: &str = "model.int8.onnx";
 pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
 /// Qwen3-ASR reads its tokenizer files from the model folder.
 pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
-/// Model ids by recognizer type; `speech::local` picks the config by id.
+/// whisper.cpp model (ggml).
+pub const WHISPER_FILE: &str = "model.bin";
+/// Model ids by recognizer type; `speech` picks the recognizer by id.
 pub const SENSE_VOICE_ID: &str = "sense-voice-small";
 pub const QWEN3_ASR_ID: &str = "qwen3-asr-0.6b";
+/// Prefix of the Whisper ids ("whisper-small").
+pub const WHISPER_ID_PREFIX: &str = "whisper-";
 pub const LLM_FILE: &str = "model.gguf";
 
 /// One file of a model: where it comes from and its name in the folder.
@@ -120,46 +124,14 @@ macro_rules! hf {
     };
 }
 
-macro_rules! whisper_files {
-    ($m:literal, $enc:expr, $enc_sha:literal, $dec:expr, $dec_sha:literal) => {
-        &[
-            FileSpec {
-                urls: hf!(concat!(
-                    "csukuangfj/sherpa-onnx-whisper-",
-                    $m,
-                    "/resolve/main/",
-                    $m,
-                    "-encoder.int8.onnx"
-                )),
-                name: ENCODER_FILE,
-                size: $enc,
-                sha256: $enc_sha,
-            },
-            FileSpec {
-                urls: hf!(concat!(
-                    "csukuangfj/sherpa-onnx-whisper-",
-                    $m,
-                    "/resolve/main/",
-                    $m,
-                    "-decoder.int8.onnx"
-                )),
-                name: DECODER_FILE,
-                size: $dec,
-                sha256: $dec_sha,
-            },
-            FileSpec {
-                urls: hf!(concat!(
-                    "csukuangfj/sherpa-onnx-whisper-",
-                    $m,
-                    "/resolve/main/",
-                    $m,
-                    "-tokens.txt"
-                )),
-                name: TOKENS_FILE,
-                size: 816_730,
-                sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-            },
-        ]
+macro_rules! whisper_file {
+    ($file:literal, $size:expr, $sha:literal) => {
+        &[FileSpec {
+            urls: hf!(concat!("ggerganov/whisper.cpp/resolve/main/", $file)),
+            name: WHISPER_FILE,
+            size: $size,
+            sha256: $sha,
+        }]
     };
 }
 
@@ -249,30 +221,29 @@ const SPECS: &[Spec] = &[
             },
         ],
     },
+    // Whisper (OpenAI, MIT) in the whisper.cpp ggml format (ggerganov/whisper.cpp,
+    // MIT). The ids are those of the earlier sherpa-onnx files: settings keep
+    // the model, and a new download replaces the old folder.
     Spec {
         id: "whisper-base",
         kind: ModelKind::Asr,
         name: "Whisper base",
         note: "빠름, 정확도 낮음",
-        files: whisper_files!(
-            "base",
-            29_120_534,
-            "0b8fb1304b6109976038efff5ace81720e00386f3ff6b54ee8c75291ca0a1e11",
-            130_672_026,
-            "9759d217388a01b3a4c7c15533201067b48ae819c4daafc8624e64b9409dc02d"
+        files: whisper_file!(
+            "ggml-base-q8_0.bin",
+            81_768_585,
+            "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9"
         ),
     },
     Spec {
         id: "whisper-small",
         kind: ModelKind::Asr,
         name: "Whisper small",
-        note: "SenseVoice보다 느림, 메모리 약 2GB. 오류율 % 한 6.4 · 일 14.4 · 중 12.1 · 영 10.3",
-        files: whisper_files!(
-            "small",
-            112_442_483,
-            "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",
-            262_226_114,
-            "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee"
+        note: "SenseVoice보다 느림, 메모리 약 0.6GB. 오류율 % 한 7.5 · 일 12.7 · 중 10.6 · 영 11.2",
+        files: whisper_file!(
+            "ggml-small-q8_0.bin",
+            264_464_607,
+            "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"
         ),
     },
     Spec {
@@ -280,25 +251,21 @@ const SPECS: &[Spec] = &[
         kind: ModelKind::Asr,
         name: "Whisper medium",
         note: "느림, 정확도 높음",
-        files: whisper_files!(
-            "medium",
-            374_196_283,
-            "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
-            571_059_257,
-            "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747"
+        files: whisper_file!(
+            "ggml-medium-q5_0.bin",
+            539_212_467,
+            "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
         ),
     },
     Spec {
         id: "whisper-turbo",
         kind: ModelKind::Asr,
         name: "Whisper turbo",
-        note: "정확도 높음, CPU에서는 실시간보다 느릴 수 있음, 메모리 3GB 이상. 오류율 % 한 6.8",
-        files: whisper_files!(
-            "turbo",
-            674_716_297,
-            "b02dcdf54f348741e93fe732b67d933c8dcb6735655f710640143081db38878b",
-            361_080_764,
-            "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547"
+        note: "정확도 높음, CPU에서는 실시간보다 느림, 메모리 약 1GB. 오류율 % 한 7.4 · 일 4.8 · 중 5.3 · 영 9.3",
+        files: whisper_file!(
+            "ggml-large-v3-turbo-q5_0.bin",
+            574_041_195,
+            "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
         ),
     },
     // Gemma 4, Apache-2.0, official Google GGUF repos (not gated). Facts:
@@ -371,6 +338,27 @@ fn spec_installed(models_dir: &Path, spec: &Spec) -> bool {
     spec.files.iter().all(|f| dir.join(f.name).is_file())
 }
 
+/// The folder of the model exists: installed, incomplete, or the files of an
+/// older format (sherpa-onnx Whisper before 2026-11-09).
+pub fn on_disk(models_dir: &Path, id: &str) -> bool {
+    path(models_dir, id).exists()
+}
+
+/// Deletes the folder of a catalog model.
+pub fn delete(models_dir: &Path, id: &str) -> anyhow::Result<()> {
+    if !SPECS.iter().any(|s| s.id == id) {
+        bail!("알 수 없는 모델입니다: {id}");
+    }
+    match std::fs::remove_dir_all(path(models_dir, id)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => bail!(
+            "{} 모델 파일을 지울 수 없습니다: {e}. 앱을 다시 시작한 뒤 다시 시도하십시오.",
+            display_name(id)
+        ),
+    }
+}
+
 /// Downloads a model. Writes to `<id>.part`, then renames, so a cancelled or
 /// failed download leaves no partial model.
 pub fn download(
@@ -413,7 +401,7 @@ pub(crate) fn download_spec(
         return Err(e);
     }
     if final_dir.exists() {
-        // An incomplete folder from an older run: replace it.
+        // An incomplete folder from an older run, or the files of an older format: replace it.
         std::fs::remove_dir_all(&final_dir).context("이전 모델 폴더를 지울 수 없습니다")?;
     }
     std::fs::rename(&part_dir, &final_dir).context("다운로드한 모델의 이름을 바꿀 수 없습니다")?;
@@ -591,8 +579,15 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), cat.len(), "ids must be unique");
         assert!(cat.iter().all(|m| m.size_bytes > 0));
+        // Whisper: one whisper.cpp file, the ids of the earlier sherpa-onnx models.
+        for spec in SPECS.iter().filter(|s| s.id.starts_with(WHISPER_ID_PREFIX)) {
+            assert_eq!(spec.kind, ModelKind::Asr);
+            assert_eq!(spec.files.len(), 1, "{}", spec.id);
+            assert_eq!(spec.files[0].name, WHISPER_FILE);
+            assert!(spec.files[0].urls[0].contains("/ggerganov/whisper.cpp/"));
+        }
         let small = cat.iter().find(|m| m.id == "whisper-small").unwrap();
-        assert_eq!(small.size_bytes, 112_442_483 + 262_226_114 + 816_730);
+        assert_eq!(small.size_bytes, 264_464_607);
         let sv = cat.iter().find(|m| m.id == SENSE_VOICE_ID).unwrap();
         assert_eq!(sv.size_bytes, 239_233_841 + 315_894);
         // The 2024-07-17 int8 file: the 2025-09-09 one breaks ko, ja and en.
@@ -716,6 +711,73 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("morago-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A Whisper folder with the sherpa-onnx files of before 2026-11-09.
+    fn old_whisper_folder(dir: &Path) -> PathBuf {
+        let old = path(dir, "whisper-small");
+        std::fs::create_dir_all(&old).unwrap();
+        for f in [ENCODER_FILE, DECODER_FILE, TOKENS_FILE] {
+            std::fs::write(old.join(f), b"old").unwrap();
+        }
+        old
+    }
+
+    #[test]
+    fn an_old_format_whisper_folder_is_on_disk_but_not_installed() {
+        let dir = temp_dir("old");
+        old_whisper_folder(&dir);
+        assert!(on_disk(&dir, "whisper-small"));
+        assert!(!is_installed(&dir, "whisper-small"));
+        assert!(!on_disk(&dir, "whisper-base"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_replaces_the_old_format_files() {
+        let body = vec![5u8; 1000];
+        let base = serve(body.clone());
+        let url = format!("{base}/m");
+        let hash = sha(&body);
+        let files = [FileSpec {
+            urls: &[&url],
+            name: WHISPER_FILE,
+            size: 1000,
+            sha256: &hash,
+        }];
+        let spec = Spec {
+            id: "whisper-small",
+            kind: ModelKind::Asr,
+            name: "t",
+            note: "t",
+            files: &files,
+        };
+        let dir = temp_dir("replace");
+        let old = old_whisper_folder(&dir);
+        download_spec(&dir, &spec, &|_| {}, &AtomicBool::new(false)).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(&old)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, [WHISPER_FILE]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_removes_the_folder_of_a_catalog_model_only() {
+        let dir = temp_dir("delete");
+        old_whisper_folder(&dir);
+        delete(&dir, "whisper-small").unwrap();
+        assert!(!on_disk(&dir, "whisper-small"));
+        // Nothing on disk: no error.
+        delete(&dir, "whisper-small").unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        for id in ["other", "..", "", "../x"] {
+            assert!(delete(&dir, id).is_err(), "{id}");
+        }
+        assert!(dir.join("other").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
