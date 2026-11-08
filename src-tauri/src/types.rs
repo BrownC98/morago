@@ -131,7 +131,7 @@ pub struct DownloadProgress {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GpuSetting {
-    /// A discrete GPU, else the CPU.
+    /// The first usable GPU, else the CPU.
     #[default]
     Auto,
     /// Only the GPU with this name, as the driver gives it.

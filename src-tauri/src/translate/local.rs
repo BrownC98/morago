@@ -206,9 +206,13 @@ mod tests {
     /// Run: `LLAMA_LIB_PROFILE=Release cargo test local_model -- --ignored --nocapture`
     /// (a debug build of llama.cpp is about 10x slower). `MORAGO_TEST_GPU=off`
     /// runs on the CPU; else the device follows the 자동 setting.
+    /// `MORAGO_TEST_GPU_DIR`: the folder of an installed GPU pack (Windows).
     #[test]
     #[ignore = "downloads a 3.3 GB model and runs it"]
     fn local_model_translates() {
+        if let Some(d) = std::env::var_os("MORAGO_TEST_GPU_DIR") {
+            gpu::init(Path::new(&d));
+        }
         let dir = ensure_model();
         let setting = match std::env::var("MORAGO_TEST_GPU").as_deref() {
             Ok("off") => GpuSetting::Off,
@@ -243,11 +247,47 @@ mod tests {
         for (text, from, to) in cases {
             let started = Instant::now();
             let out = t.translate(text, Some(from), to).unwrap();
+            let took = started.elapsed();
+            let tokens = t.model.vocab().tokenize(out.as_bytes(), false, false).len();
             println!(
-                "[{from}->{to}] {text}\n  => {out}\n  ({:.1?})",
-                started.elapsed()
+                "[{from}->{to}] {text}\n  => {out}\n  ({took:.1?}, {tokens} tokens, {:.1} tokens/s with the prompt)",
+                tokens as f64 / took.as_secs_f64()
             );
             assert!(!out.is_empty());
         }
+    }
+
+    /// D2 B without the memory check of `gpu::place`: a model too big for the
+    /// GPU gives an error (the meeting does not start), not an abort.
+    /// Run: `MORAGO_TEST_BIG_GGUF=<12B model.gguf> MORAGO_TEST_GPU_DIR=<pack> LLAMA_LIB_PROFILE=Release
+    /// cargo test big_model -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a GPU and a model bigger than its memory"]
+    fn big_model_on_the_gpu_fails_cleanly() {
+        if let Some(d) = std::env::var_os("MORAGO_TEST_GPU_DIR") {
+            gpu::init(Path::new(&d));
+        }
+        let gguf = std::path::PathBuf::from(std::env::var_os("MORAGO_TEST_BIG_GGUF").unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("big")).unwrap();
+        std::fs::hard_link(&gguf, dir.path().join("big").join("model.gguf")).unwrap();
+        let size = std::fs::metadata(&gguf).unwrap().len();
+        let checked = gpu::place(&GpuSetting::Auto, size).unwrap();
+        println!("place: {:?}", checked.status);
+        assert!(
+            !checked.status.gpu,
+            "the memory check must keep it on the CPU"
+        );
+
+        let forced = gpu::place(&GpuSetting::Auto, 0).unwrap();
+        assert!(forced.status.gpu, "no usable GPU: {:?}", forced.status);
+        let started = Instant::now();
+        let err = LocalTranslator::load(dir.path(), "big", &forced)
+            .err()
+            .unwrap()
+            .to_string();
+        println!("error after {:.1?}: {err}", started.elapsed());
+        assert!(err.contains("불러오지 못했습니다"), "{err}");
+        assert!(err.contains("「끔」"), "{err}");
     }
 }

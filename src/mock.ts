@@ -39,7 +39,7 @@ let settings: Settings = {
 
 // GPU: one NVIDIA GPU; ?mock=nogpu has none, ?mock=gpufail fails the start on the GPU.
 const GPU_NAME = "NVIDIA GeForce RTX 5060 Laptop GPU";
-const pack = { id: "cuda-12.9.1", size_bytes: 553 * MB, installed: false, restart: false };
+const pack = { id: "cuda-12.9.1", size_bytes: 528 * MB, installed: false, restart: false };
 function gpuStatus(): GpuStatus {
   const gpus = flags.has("nogpu") ? [] : [GPU_NAME];
   const local = settings.translate.kind === "local";

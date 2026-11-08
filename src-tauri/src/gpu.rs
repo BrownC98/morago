@@ -674,8 +674,8 @@ mod delayload {
     static __pfnDliFailureHook2: Hook = hook;
 
     /// A reference that keeps the hook in the link.
-    pub fn keep() -> *const Hook {
-        &raw const __pfnDliFailureHook2
+    pub fn keep() -> *const c_void {
+        (&raw const __pfnDliFailureHook2).cast()
     }
 }
 
@@ -787,6 +787,31 @@ mod tests {
             std::fs::write(bin.join(f.name), b"short").unwrap();
         }
         assert!(!pack_installed(dir.path()));
+    }
+
+    /// Run: `MORAGO_TEST_GPU_DIR=<dir> cargo test --lib gpu::tests::pack_downloads -- --ignored --nocapture`
+    #[test]
+    #[ignore = "downloads 528 MB from NVIDIA"]
+    fn pack_downloads_and_installs() {
+        let dir = std::env::var_os("MORAGO_TEST_GPU_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("morago-gpu-test"));
+        let before = status(&GpuSetting::Auto, Some(3_349_516_256));
+        println!("before: {before:?}");
+        let last = Mutex::new(0u64);
+        download_pack(
+            &dir,
+            &|p| *last.lock().unwrap() = p.done_bytes,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(pack_installed(&dir));
+        assert!(!dir.join(PACK_ID).join("cudart.zip").exists());
+        println!(
+            "downloaded {} bytes into {}",
+            last.lock().unwrap(),
+            dir.display()
+        );
     }
 
     /// The test exe links like the app exe (build.rs link args): the CUDA

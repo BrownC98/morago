@@ -1,0 +1,49 @@
+name: CUDA toolkit (Windows)
+description: >
+  The CUDA build of llama.cpp (Cargo feature "cuda" on Windows) needs nvcc,
+  the CUDA runtime, cuBLAS and CCCL. Only these NVIDIA redist archives
+  (12.9.1, pinned SHA-256) instead of the full toolkit installer, kept in the
+  Actions cache. Also the MSVC environment and Ninja: the Visual Studio CMake
+  generator fails on long CUDA paths.
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: ${{ runner.temp }}/cuda
+        key: cuda-12.9.1-nvcc-cudart-cublas-cccl-v1
+    - name: CUDA redist archives
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        d="$RUNNER_TEMP/cuda"; z="$RUNNER_TEMP/cuda-zips"; mkdir -p "$d" "$z"; cd "$z"
+        base=https://developer.download.nvidia.com/compute/cuda/redist
+        while read -r name ver sha; do
+          f="$name-windows-x86_64-$ver-archive.zip"
+          curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$f" "$base/$name/windows-x86_64/$f"
+          echo "$sha  $f" | sha256sum -c -
+          7z x -y -bd "$f" > /dev/null
+          cp -r "${f%.zip}"/. "$d"/
+          rm -rf "${f%.zip}" "$f"
+        done <<'EOF'
+        cuda_nvcc 12.9.86 227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85
+        cuda_cudart 12.9.79 179e9c43b0735ffe67207b3da556eb5a0c50f3047961882b7657d3b822d34ef8
+        libcublas 12.9.1.4 d534d98b0b453a98914dbf3adf47d7e84b55037abf02f87466439e1dcef581ed
+        cuda_cccl 12.9.27 17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5
+        EOF
+        # The build links the import libraries; the cuBLAS DLLs (0.8 GB) are not needed.
+        rm -rf "$z" "$d"/bin/cublas*.dll "$d"/bin/nvblas*.dll
+    - uses: ilammy/msvc-dev-cmd@v1
+    - name: CUDA environment
+      shell: bash
+      run: |
+        # Not on PATH: the tests run with no CUDA DLL, as on a PC without the GPU pack.
+        d=$(cygpath -w "$RUNNER_TEMP/cuda")
+        echo "CUDA_PATH=$d" >> "$GITHUB_ENV"
+        echo "CUDACXX=$d\\bin\\nvcc.exe" >> "$GITHUB_ENV"
+        echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+        if ! command -v ninja; then
+          vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+          echo "$vs\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja" >> "$GITHUB_PATH"
+        fi

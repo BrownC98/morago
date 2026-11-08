@@ -67,10 +67,13 @@ fi
   # CUDA build of llama.cpp (Cargo.toml feature "cuda"): CUDA toolkit (CUDA_PATH),
   # MSVC environment and Ninja. Its own short target folder: the CPU build of
   # other worktrees does not rebuild it, and nvcc gets short paths.
+  # The Windows environment of a WSL session can be older than the CUDA install: find the folder.
   if grep -q 'features = \["cuda"\]' "$repo/src-tauri/Cargo.toml"; then
+    cuda=$(ls -d "/mnt/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12."* 2>/dev/null | sort -V | tail -1)
+    [ -x "$cuda/bin/nvcc.exe" ] || { echo "win-check: CUDA Toolkit 12 not found" >&2; exit 1; }
     vs=$("/mnt/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" \
       -latest -products '*' -property installationPath 2>/dev/null | tr -d '\r')
-    echo 'if not exist "%CUDA_PATH%\bin\nvcc.exe" (echo win-check: CUDA toolkit not found ^(CUDA_PATH^) & exit /b 1)'
+    echo "set \"CUDA_PATH=$(wslpath -w "$cuda")\""
     echo "call \"$vs\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul"
     echo "set \"PATH=$vs\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;%PATH%\""
     echo 'set CMAKE_GENERATOR=Ninja'
