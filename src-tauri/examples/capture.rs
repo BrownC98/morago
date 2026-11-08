@@ -44,53 +44,33 @@ fn main() -> anyhow::Result<()> {
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
-    let mut wav = hound::WavWriter::create(out, spec)?;
-    let mut written: u64 = 0; // samples written
+    let mut out_wav = Output {
+        wav: hound::WavWriter::create(out, spec)?,
+        written: 0,
+        peak: 0.0,
+        chunks: 0,
+    };
     let deadline = t0 + Duration::from_secs(secs);
-    let (mut chunks, mut peak) = (0u32, 0.0f32);
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
         }
         match rx.recv_timeout(left) {
-            Ok(chunk) => {
-                let start = chunk.start_ms * u64::from(SAMPLE_RATE) / 1000;
-                for _ in written..start {
-                    wav.write_sample(0.0f32)?;
-                    written += 1;
-                }
-                // Skip samples that overlap what is written (rounding of start_ms).
-                let skip = written.saturating_sub(start) as usize;
-                for &s in chunk.samples.iter().skip(skip) {
-                    peak = peak.max(s.abs());
-                    wav.write_sample(s)?;
-                    written += 1;
-                }
-                chunks += 1;
-            }
-            Err(RecvTimeoutError::Timeout) => break,
-            Err(RecvTimeoutError::Disconnected) => break,
+            Ok(chunk) => out_wav.put(&chunk)?,
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
         }
     }
     drop(capture); // stops the stream; the worker sends the audio it still holds
     while let Ok(chunk) = rx.try_recv() {
-        let start = chunk.start_ms * u64::from(SAMPLE_RATE) / 1000;
-        for _ in written..start {
-            wav.write_sample(0.0f32)?;
-            written += 1;
-        }
-        for &s in chunk
-            .samples
-            .iter()
-            .skip(written.saturating_sub(start) as usize)
-        {
-            peak = peak.max(s.abs());
-            wav.write_sample(s)?;
-            written += 1;
-        }
-        chunks += 1;
+        out_wav.put(&chunk)?;
     }
+    let Output {
+        wav,
+        written,
+        peak,
+        chunks,
+    } = out_wav;
     wav.finalize()?;
     println!(
         "{chunks} chunks, {:.2} s of audio, peak {peak:.3} -> {out}",
@@ -100,4 +80,31 @@ fn main() -> anyhow::Result<()> {
         println!("warning: the file is silent. Check the permission and that sound is playing.");
     }
     Ok(())
+}
+
+struct Output {
+    wav: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    /// Samples written so far.
+    written: u64,
+    peak: f32,
+    chunks: u32,
+}
+
+impl Output {
+    fn put(&mut self, chunk: &types::AudioChunk) -> anyhow::Result<()> {
+        let start = chunk.start_ms * u64::from(SAMPLE_RATE) / 1000;
+        for _ in 0..start.saturating_sub(self.written) {
+            self.wav.write_sample(0.0f32)?;
+            self.written += 1;
+        }
+        // Skip samples that overlap what is written (rounding of start_ms).
+        let skip = self.written.saturating_sub(start) as usize;
+        for &s in chunk.samples.iter().skip(skip) {
+            self.peak = self.peak.max(s.abs());
+            self.wav.write_sample(s)?;
+            self.written += 1;
+        }
+        self.chunks += 1;
+        Ok(())
+    }
 }
