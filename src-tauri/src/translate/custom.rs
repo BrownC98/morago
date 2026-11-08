@@ -72,6 +72,12 @@ fn error_text(body: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or(body)
         .trim();
+    text.to_string()
+}
+
+/// Cuts user-facing server text. Call it after `redact`: a key cut in half
+/// would no longer match and its prefix would stay (review of ce83816).
+fn shorten(text: &str) -> String {
     text.chars().take(MAX_ERROR_CHARS).collect()
 }
 
@@ -115,7 +121,7 @@ impl Translator for CustomTranslator {
             return Err(anyhow!(
                 "번역 서버 오류 (HTTP {}): {}",
                 status.as_u16(),
-                self.redact(&error_text(&response_text))
+                shorten(&self.redact(&error_text(&response_text)))
             ));
         }
         let translation = clean_output(&parse_content(&response_text)?, text);
@@ -270,6 +276,22 @@ mod tests {
         assert!(err.contains("401"), "{err}");
         assert!(err.contains("Incorrect API key provided"), "{err}");
         assert!(!err.contains("sk-secret-123"), "{err}");
+    }
+
+    #[test]
+    fn a_key_across_the_length_limit_is_not_kept() {
+        let key = "sk-test-1234567890abcdefghij";
+        let message = format!("{}{key} is wrong", "x".repeat(MAX_ERROR_CHARS - 20));
+        let body = json!({"error": {"message": message}}).to_string();
+        let (base_url, server) = mock_server("401 Unauthorized", &body);
+        let mut t = translator(base_url, Some(key));
+        let err = t
+            .translate("Hello", Some("en"), "ko")
+            .unwrap_err()
+            .to_string();
+        server.join().unwrap();
+        assert!(!err.contains("sk-test"), "{err}");
+        assert!(err.contains("***"), "{err}");
     }
 
     #[test]
