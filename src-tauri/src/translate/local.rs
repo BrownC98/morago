@@ -32,7 +32,6 @@ pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
     threads: i32,
-    history: History,
 }
 
 impl LocalTranslator {
@@ -50,14 +49,13 @@ impl LocalTranslator {
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
         let model = LlamaModel::load_from_file(backend, &path, &params)
             .map_err(|e| anyhow!("번역 모델을 읽지 못했습니다 ({model_id}): {e}"))?;
-        let threads = std::thread::available_parallelism()
-            .map_or(4, |n| n.get())
-            .min(16) as i32;
+        // About the physical cores: more threads than that slow ggml down.
+        let threads =
+            (std::thread::available_parallelism().map_or(4, |n| n.get()) / 2).clamp(2, 8) as i32;
         Ok(Self {
             model,
             label: format!("로컬 {}", display_name(model_id)),
             threads,
-            history: History::default(),
         })
     }
 
@@ -116,13 +114,12 @@ impl Translator for LocalTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
-        let system = system_prompt(source_language, target_language, &self.history);
+        let system = system_prompt(source_language, target_language, &History::default());
         let raw = self.generate(&system, text)?;
         let translation = clean_output(&raw, text);
         if translation.is_empty() {
             return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
         }
-        self.history.push(text);
         Ok(translation)
     }
 
@@ -206,14 +203,19 @@ mod tests {
         dir
     }
 
-    /// Run: `cargo test local_model -- --ignored --nocapture`
+    /// Run: `LLAMA_LIB_PROFILE=Release cargo test local_model -- --ignored --nocapture`
+    /// (a debug build of llama.cpp is about 10x slower).
     #[test]
     #[ignore = "downloads a 1 GB model and runs it on the CPU"]
     fn local_model_translates() {
         let dir = ensure_model();
-        let started = Instant::now();
+        let model_started = Instant::now();
         let mut t = LocalTranslator::load(&dir, MODEL_ID).unwrap();
-        println!("label: {}; load: {:.1?}", t.label(), started.elapsed());
+        println!(
+            "label: {}; load: {:.1?}",
+            t.label(),
+            model_started.elapsed()
+        );
         let cases = [
             (
                 "Let's move the launch to the second week of December.",
@@ -226,6 +228,7 @@ mod tests {
                 "ja",
             ),
             ("来週の月曜日までに資料を送ります。", "ja", "en"),
+            ("Can you send me the slides?", "en", "ko"),
         ];
         for (text, from, to) in cases {
             let started = Instant::now();
