@@ -63,9 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain (rust-toolchain.toml)
+      - uses: ./.github/actions/rust-toolchain
         if: needs.changes.outputs.rust == 'true'
-        run: rustup toolchain install --no-self-update
       - name: Rust format
         if: needs.changes.outputs.rust == 'true'
         working-directory: src-tauri
@@ -97,8 +96,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install --no-self-update
+      - uses: ./.github/actions/rust-toolchain
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'
@@ -144,8 +142,7 @@ jobs:
       MORAGO_TEST_WAVS: ${{ github.workspace }}/e2e/wavs
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install --no-self-update
+      - uses: ./.github/actions/rust-toolchain
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'
@@ -215,8 +212,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install --no-self-update
+      - uses: ./.github/actions/rust-toolchain
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'
