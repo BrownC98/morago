@@ -200,7 +200,8 @@ mod tests {
             _ => GpuSetting::Auto,
         };
         let file = models::path(models_dir, id).join(models::WHISPER_FILE);
-        let p = gpu::place(&setting, std::fs::metadata(file).unwrap().len()).unwrap();
+        let need = gpu::whisper_memory(std::fs::metadata(file).unwrap().len(), false);
+        let p = gpu::place_beside(&setting, need, 0).unwrap();
         println!("device: {:?}", p.status);
         p
     }

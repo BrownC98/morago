@@ -160,21 +160,19 @@ fn place_with(
 ) -> anyhow::Result<Placements> {
     let translate = match &settings.translate {
         TranslateConfig::Local { model_id } => {
-            let bytes = model_bytes(models_dir, model_id, "model.gguf");
-            Some((place(bytes, 0)?, bytes))
+            let need = gpu::needed_memory(model_bytes(models_dir, model_id, "model.gguf"));
+            Some((place(need, 0)?, need))
         }
         TranslateConfig::Custom { .. } => None,
     };
     let beside = match &translate {
-        Some((p, bytes)) if p.gpu.is_some() => gpu::needed_memory(*bytes),
+        Some((p, need)) if p.gpu.is_some() => *need,
         _ => 0,
     };
     let asr = match &settings.asr {
         AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
-            Some(place(
-                model_bytes(models_dir, model_id, models::WHISPER_FILE),
-                beside,
-            )?)
+            let bytes = model_bytes(models_dir, model_id, models::WHISPER_FILE);
+            Some(place(gpu::whisper_memory(bytes, beside > 0), beside)?)
         }
         AsrConfig::Local { .. } => Some(Placement::cpu("이 모델은 CPU에서만 돌립니다.")),
         AsrConfig::Custom { .. } => None,
@@ -187,15 +185,15 @@ fn place_with(
 
 /// Devices for a session start. An error (the chosen GPU is missing) stops it.
 pub fn place_models(settings: &Settings, models_dir: &Path) -> anyhow::Result<Placements> {
-    place_with(settings, models_dir, &|bytes, beside| {
-        gpu::place_beside(&settings.gpu, bytes, beside)
+    place_with(settings, models_dir, &|need, beside| {
+        gpu::place_beside(&settings.gpu, need, beside)
     })
 }
 
 /// Devices for the settings rows: an error shows as the CPU reason.
 pub fn model_devices(settings: &Settings, models_dir: &Path) -> Placements {
-    place_with(settings, models_dir, &|bytes, beside| {
-        Ok(gpu::place_beside(&settings.gpu, bytes, beside)
+    place_with(settings, models_dir, &|need, beside| {
+        Ok(gpu::place_beside(&settings.gpu, need, beside)
             .unwrap_or_else(|e| Placement::cpu(e.to_string())))
     })
     .expect("no error")
@@ -1016,16 +1014,16 @@ mod tests {
                 .unwrap()
                 .size_bytes
         };
-        let gemma = catalog("gemma-4-e2b-it-q4");
+        let gemma = gpu::needed_memory(catalog("gemma-4-e2b-it-q4"));
         let turbo = catalog("whisper-turbo");
         for translate_on_gpu in [true, false] {
             let calls = Mutex::new(Vec::new());
             let p = place_with(
                 &local_settings("whisper-turbo"),
                 dir.path(),
-                &|bytes, beside| {
-                    calls.lock().unwrap().push((bytes, beside));
-                    Ok(if translate_on_gpu || bytes != gemma {
+                &|need, beside| {
+                    calls.lock().unwrap().push((need, beside));
+                    Ok(if translate_on_gpu || need != gemma {
                         Placement {
                             gpu: Some((0, "GPU".into())),
                             status: ModelDevice {
@@ -1039,12 +1037,11 @@ mod tests {
                 },
             )
             .unwrap();
-            let beside = if translate_on_gpu {
-                gpu::needed_memory(gemma)
-            } else {
-                0
-            };
-            assert_eq!(*calls.lock().unwrap(), [(gemma, 0), (turbo, beside)]);
+            let whisper = (
+                gpu::whisper_memory(turbo, translate_on_gpu),
+                if translate_on_gpu { gemma } else { 0 },
+            );
+            assert_eq!(*calls.lock().unwrap(), [(gemma, 0), whisper]);
             assert_eq!(p.translate.unwrap().status.gpu, translate_on_gpu);
             assert!(p.asr.unwrap().status.gpu);
         }
@@ -1213,6 +1210,14 @@ mod tests {
         let store = SessionStore::new(root.path());
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn Sink> = recorder.clone();
+        let free = || -> Vec<usize> {
+            llama_cpp_2::list_llama_ggml_backend_devices()
+                .into_iter()
+                .filter(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
+                .map(|d| d.memory_free >> 20)
+                .collect()
+        };
+        let before = free();
         let started = Instant::now();
         let p = start_pipeline(
             &settings,
@@ -1224,16 +1229,12 @@ mod tests {
             partial::enabled(&settings.asr),
         )
         .unwrap();
-        let free: Vec<usize> = llama_cpp_2::list_llama_ggml_backend_devices()
-            .into_iter()
-            .filter(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
-            .map(|d| d.memory_free >> 20)
-            .collect();
         println!(
-            "load {:.1?}; ASR {:?}; translation {:?}; free GPU memory {free:?} MiB",
+            "load {:.1?}; ASR {:?}; translation {:?}; free GPU memory {before:?} -> {:?} MiB",
             started.elapsed(),
             p.asr_device,
-            p.translate_device
+            p.translate_device,
+            free()
         );
         feed_in_real_time(&p, &e2e_chunks());
         let (summary, meta, utterances) = finish(p, root.path(), &store);
