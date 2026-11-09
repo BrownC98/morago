@@ -156,8 +156,14 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
     if let AsrConfig::Custom { endpoint } = &settings.asr {
         check_base_url(&endpoint.base_url)?;
     }
-    if let TranslateConfig::Custom { endpoint, .. } = &settings.translate {
+    if let TranslateConfig::Custom {
+        endpoint,
+        extra_body,
+        ..
+    } = &settings.translate
+    {
         check_base_url(&endpoint.base_url)?;
+        translate::check_extra_body_map(extra_body)?;
     }
     settings::save(&state.settings_path, &settings).map_err(err)?;
     if let Session::Running(r) = &*state.session.lock().expect("session lock") {
@@ -187,6 +193,12 @@ fn check_base_url(url: &str) -> CmdResult<()> {
         );
     }
     Ok(())
+}
+
+/// Live check of the `extra_body` text with the rules of `save_settings`.
+#[tauri::command]
+pub fn check_extra_body(text: String) -> CmdResult<()> {
+    translate::check_extra_body(&text).map(drop)
 }
 
 #[tauri::command]

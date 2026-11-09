@@ -28,7 +28,12 @@ let settings: Settings = {
   target_language: "ko",
   asr: { kind: "local", model_id: "sense-voice-small" },
   meeting_language: null,
-  translate: { kind: "custom", endpoint: { base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" }, partial_interval_ms: 1500 },
+  translate: {
+    kind: "custom",
+    endpoint: { base_url: "https://api.openai.com/v1", model: "" },
+    extra_body: { model: "gpt-4o-mini" },
+    partial_interval_ms: 1500,
+  },
   diarize: true,
   capture_mic: true,
   capture_system: true,
@@ -184,7 +189,7 @@ function startRun(): SessionMeta {
     ended_at: null,
     target_language: settings.target_language,
     asr_label: settings.asr.kind === "local" ? "로컬 SenseVoice Small" : `사용자 지정 ${settings.asr.endpoint.model}`,
-    translator_label: settings.translate.kind === "local" ? "로컬 Gemma 4 E2B" : `사용자 지정 ${settings.translate.endpoint.model}`,
+    translator_label: settings.translate.kind === "local" ? "로컬 Gemma 4 E2B" : `사용자 지정 ${settings.translate.extra_body?.model}`,
     speaker_names: {},
   };
   run = { id, startedAt: now.getTime(), timers: [], utterances: [], meta };
@@ -293,6 +298,18 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
     case "save_settings":
       settings = a.settings as Settings;
       return delay(undefined);
+    case "check_extra_body": {
+      // Two of the core rules, enough to show both states in a browser.
+      const text = String(a.text).trim();
+      let value: unknown = {};
+      try {
+        if (text) value = JSON.parse(text);
+      } catch {
+        throw "JSON 형식이 아닙니다 (1번째 줄)";
+      }
+      if (typeof value !== "object" || value === null || Array.isArray(value)) throw "{ }로 감싼 JSON 객체를 적으세요";
+      return delay(undefined);
+    }
     case "set_api_key":
       keys.set(`${a.role}|${a.baseUrl}`, String(a.key));
       return delay(undefined);

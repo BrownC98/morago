@@ -94,7 +94,8 @@ export function providerLabel(cfg: ProviderConfig, models: ModelInfo[]): string 
     const m = models.find((x) => x.id === cfg.model_id);
     return `로컬 ${m?.name ?? cfg.model_id}`;
   }
-  return `사용자 지정 ${cfg.endpoint.model || "(모델 없음)"}`;
+  const model = typeof cfg.extra_body?.model === "string" ? cfg.extra_body.model : cfg.endpoint.model;
+  return `사용자 지정 ${model || "(모델 없음)"}`;
 }
 
 export function sessionFileName(title: string, ext: string): string {
