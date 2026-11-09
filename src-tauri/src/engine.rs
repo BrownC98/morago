@@ -710,6 +710,10 @@ fn translate_loop(
         partials.as_mut(),
         sink.as_ref(),
     ) {
+        if partials.as_ref().is_some_and(|p| p.gpu_failed) {
+            gpu_failed = true;
+            partials = None;
+        }
         let target_now = target.read().expect("target lock").clone();
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage

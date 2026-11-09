@@ -7,6 +7,7 @@
 //! under the same mutex, only for the speech in progress.
 
 use super::{BacklogRx, Sink};
+use crate::gpu::GpuFailure;
 use crate::models;
 use crate::settings::{AsrConfig, TranslateConfig};
 use crate::speech;
@@ -25,6 +26,7 @@ const OFFER_STEP_MS: u64 = 700;
 /// (Windows, 4 threads, 2026-11-09):
 /// - SenseVoice Small: yes, RTF 0.024 to 0.054.
 /// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 (2 s per run at 6 s of audio).
+/// - Fun-ASR-MLT-Nano: no, RTF 0.18 to 0.37 (1.6 s per run at 6 s of audio).
 /// - Whisper: no, RTF 0.35 on the CPU (whisper.cpp): the CPU would never rest.
 /// - Custom: no, API cost.
 pub(super) fn enabled(asr: &AsrConfig) -> bool {
@@ -278,6 +280,9 @@ pub(super) struct Translations {
     interval: Duration,
     /// Speech generation and start time of the last request, per source.
     last: [Option<(u64, Instant)>; 2],
+    /// A partial translation got a `GpuFailure`: the engine has the fault,
+    /// no partial runs again and `translate_loop` stops using the model.
+    pub(super) gpu_failed: bool,
 }
 
 enum Next {
@@ -299,10 +304,14 @@ impl Translations {
             live: live.clone(),
             interval,
             last: [None; 2],
+            gpu_failed: false,
         }
     }
 
     fn next(&mut self) -> Next {
+        if self.gpu_failed {
+            return Next::Idle;
+        }
         let mut slot = self.slot.request.lock().expect("slot lock");
         let Some((source, generation)) = slot.as_ref().map(|r| (r.source, r.generation)) else {
             return Next::Idle;
@@ -323,7 +332,7 @@ impl Translations {
 
     /// Stops when a final waits or when the speech of the request ends.
     fn run(
-        &self,
+        &mut self,
         request: Request,
         translator: &mut dyn Translator,
         target: &RwLock<String>,
@@ -349,6 +358,10 @@ impl Translations {
                     started.elapsed().as_millis()
                 );
                 self.live.translation(&request, text, sink);
+            }
+            Err(e) if e.is::<GpuFailure>() => {
+                self.gpu_failed = true;
+                sink.fault(&e.to_string());
             }
             Err(e) => log::debug!("partial translation: {e}"),
         }
@@ -465,6 +478,7 @@ mod tests {
         assert!(enabled(&local(models::SENSE_VOICE_ID)));
         for id in [
             models::QWEN3_ASR_ID,
+            models::FUN_ASR_MLT_ID,
             "whisper-base",
             "whisper-small",
             "whisper-turbo",
@@ -794,6 +808,73 @@ mod tests {
             self.thread.join().unwrap();
             self.calls.lock().unwrap().clone()
         }
+    }
+
+    /// Counts calls; every partial translation fails on the GPU.
+    #[derive(Default)]
+    struct BrokenGpuPartials {
+        partials: Arc<AtomicU64>,
+        finals: Arc<AtomicU64>,
+    }
+
+    impl Translator for BrokenGpuPartials {
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            self.finals.fetch_add(1, Ordering::Relaxed);
+            Ok(format!("번역 {text}"))
+        }
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            self.partials.fetch_add(1, Ordering::Relaxed);
+            Err(GpuFailure("GPU 메모리 부족".into()).into())
+        }
+        fn label(&self) -> String {
+            "broken".into()
+        }
+    }
+
+    #[test]
+    fn a_gpu_failure_in_a_partial_translation_stops_the_session_once() {
+        let recorder = Arc::new(Recorder::default());
+        let t = Translations::new(&Arc::new(Live::default()), Duration::ZERO);
+        let (live, slot) = (t.live.clone(), t.slot.clone());
+        ask(&live, &slot, "one", recorder.as_ref());
+        let translator = BrokenGpuPartials::default();
+        let (partials, finals) = (translator.partials.clone(), translator.finals.clone());
+        let (tx, rx) = backlog(60_000, utterance_ms);
+        let sink = recorder.clone();
+        let thread = std::thread::spawn(move || {
+            translate_loop(
+                rx,
+                Box::new(translator),
+                Arc::new(Mutex::new(None)),
+                Arc::new(RwLock::new("ko".into())),
+                sink,
+                Some(t),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while recorder.errors.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "no fault");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // After the fault: no partial runs and no final goes to the model.
+        ask(&live, &slot, "one two", recorder.as_ref());
+        tx.push(final_utterance(1), &mut |_| {});
+        drop(tx);
+        thread.join().unwrap();
+        assert_eq!(*recorder.errors.lock().unwrap(), ["fault: GPU 메모리 부족"]);
+        assert_eq!(partials.load(Ordering::Relaxed), 1);
+        assert_eq!(finals.load(Ordering::Relaxed), 0);
+        let u = &recorder.utterances.lock().unwrap()[0];
+        assert!(
+            matches!(u.translation, TranslationState::Failed { .. }),
+            "{u:?}"
+        );
     }
 
     #[test]

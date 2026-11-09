@@ -901,6 +901,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                   (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
                 </li>
                 <li translate="no">Qwen3-ASR 0.6B (Qwen, Alibaba Cloud): Apache License 2.0</li>
+                <li translate="no">Fun-ASR-MLT-Nano (FunAudioLLM, Alibaba Group): Apache License 2.0</li>
                 <li translate="no">Whisper (OpenAI): MIT License</li>
                 <li translate="no">whisper.cpp, ggml (The ggml authors): MIT License</li>
                 <li>

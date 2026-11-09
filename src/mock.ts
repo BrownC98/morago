@@ -88,6 +88,7 @@ function gpuStatus(): GpuStatus {
 const models: ModelInfo[] = [
   { id: "sense-voice-small", kind: "asr", name: "SenseVoice Small", size_bytes: 229 * MB, note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7", installed: !flags.has("nomodel"), on_disk: !flags.has("nomodel") },
   { id: "qwen3-asr-0.6b", kind: "asr", name: "Qwen3-ASR 0.6B", size_bytes: 941 * MB, note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1", installed: false, on_disk: false },
+  { id: "fun-asr-mlt-nano", kind: "asr", name: "Fun-ASR-MLT-Nano", size_bytes: 963 * MB, note: "31개 언어, 일본어 정확도 높음, 느림, 메모리 약 1.7GB. 오류율 % 한 6.4 · 일 2.9 · 중 2.9 · 영 4.3", installed: false, on_disk: false },
   { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 78 * MB, note: "빠름, 정확도 낮음", installed: true, on_disk: true },
   { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 252 * MB, note: "SenseVoice보다 느림, 메모리 약 0.6GB. 오류율 % 한 7.5 · 일 12.7 · 중 10.6 · 영 11.2", installed: false, on_disk: true },
   { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 514 * MB, note: "느림, 정확도 높음", installed: false, on_disk: false },
