@@ -4,6 +4,7 @@
 
 use crate::types::{Endpoint, GpuSetting};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,19 +17,20 @@ pub enum AsrConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", from = "RawTranslateConfig")]
 pub enum TranslateConfig {
     /// Local LLM from `models::catalog()` (kind Translation).
     Local { model_id: String },
     /// OpenAI-compatible `POST {base_url}/chat/completions`.
     Custom {
+        /// `model` is always "": the model is `extra_body.model`.
         endpoint: Endpoint,
-        /// `None` = default: the request has no `reasoning_effort` key.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reasoning_effort: Option<ReasoningEffort>,
+        /// Merged into each request; the app sets `messages` and `stream`.
+        /// Passes `translate::check_extra_body_map`.
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        extra_body: Map<String, Value>,
         /// Least time between two partial translation requests of one speech
         /// (500..=10000 ms). `None` (`null`) = no partial requests ("끔").
-        #[serde(default = "default_partial_interval_ms")]
         partial_interval_ms: Option<u32>,
     },
 }
@@ -38,27 +40,50 @@ fn default_partial_interval_ms() -> Option<u32> {
     Some(1500)
 }
 
-/// Value of the `reasoning_effort` request field of a custom translation server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReasoningEffort {
-    /// Sent as `"none"`.
-    #[serde(rename = "none")]
-    Off,
-    Minimal,
-    Low,
-    Medium,
-    High,
+/// The stored form, also of files from before `extra_body`.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RawTranslateConfig {
+    Local {
+        model_id: String,
+    },
+    Custom {
+        endpoint: Endpoint,
+        #[serde(default)]
+        extra_body: Map<String, Value>,
+        /// Old field; read only, moved into `extra_body` like `endpoint.model`.
+        #[serde(default)]
+        reasoning_effort: Option<String>,
+        #[serde(default = "default_partial_interval_ms")]
+        partial_interval_ms: Option<u32>,
+    },
 }
 
-impl ReasoningEffort {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "none",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
+impl From<RawTranslateConfig> for TranslateConfig {
+    fn from(raw: RawTranslateConfig) -> Self {
+        match raw {
+            RawTranslateConfig::Local { model_id } => Self::Local { model_id },
+            RawTranslateConfig::Custom {
+                mut endpoint,
+                mut extra_body,
+                reasoning_effort,
+                partial_interval_ms,
+            } => {
+                if let Some(effort) = reasoning_effort {
+                    extra_body
+                        .entry("reasoning_effort")
+                        .or_insert(Value::String(effort));
+                }
+                let model = std::mem::take(&mut endpoint.model);
+                if !model.is_empty() {
+                    extra_body.entry("model").or_insert(Value::String(model));
+                }
+                Self::Custom {
+                    endpoint,
+                    extra_body,
+                    partial_interval_ms,
+                }
+            }
         }
     }
 }
@@ -135,7 +160,10 @@ pub fn load(path: &Path) -> anyhow::Result<Settings> {
     // A UTF-8 BOM (some Windows editors) is not damage.
     let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
     match serde_json::from_slice(json) {
-        Ok(settings) => Ok(settings),
+        Ok(mut settings) => {
+            drop_bad_extra_body(&mut settings);
+            Ok(settings)
+        }
         Err(e) => {
             // The log has the error place only: serde_json messages carry values.
             let reason = crate::store::json_error_place(&e);
@@ -153,6 +181,17 @@ pub fn load(path: &Path) -> anyhow::Result<Settings> {
             }
             Ok(Settings::default())
         }
+    }
+}
+
+/// A hand-edited `extra_body` with an API key or an app key is not used:
+/// `save_settings` would refuse each later save.
+fn drop_bad_extra_body(settings: &mut Settings) {
+    if let TranslateConfig::Custom { extra_body, .. } = &mut settings.translate
+        && let Err(reason) = crate::translate::check_extra_body_map(extra_body)
+    {
+        log::warn!("settings file: extra_body is not used ({reason})");
+        extra_body.clear();
     }
 }
 
@@ -215,14 +254,14 @@ mod tests {
         assert_eq!(names, ["settings.json"], "no temp file left");
     }
 
-    fn translate_custom(effort: Option<ReasoningEffort>) -> Settings {
+    fn translate_custom(extra_body: Value) -> Settings {
         Settings {
             translate: TranslateConfig::Custom {
                 endpoint: Endpoint {
                     base_url: "http://localhost:8000/v1".into(),
-                    model: "gpt-test".into(),
+                    model: String::new(),
                 },
-                reasoning_effort: effort,
+                extra_body: extra_body.as_object().unwrap().clone(),
                 partial_interval_ms: Some(1500),
             },
             ..Settings::default()
@@ -234,7 +273,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         for (interval, text) in [(Some(2500), "2500"), (None, "null")] {
-            let mut s = translate_custom(None);
+            let mut s = translate_custom(serde_json::json!({}));
             if let TranslateConfig::Custom {
                 partial_interval_ms,
                 ..
@@ -252,49 +291,104 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reasoning_effort_round_trip_with_lowercase_values() {
+    /// A settings file with a custom translation server; `model` is `endpoint.model`.
+    fn custom_file(model: &str, fields: &str) -> String {
+        format!(
+            r#"{{"translate":{{"kind":"custom","endpoint":{{"base_url":"http://localhost:8000/v1","model":"{model}"}}{fields}}}}}"#
+        )
+    }
+
+    /// Loads `file`, saves it again and returns the settings and the saved `translate`.
+    fn load_and_save(file: &str) -> (Settings, Value) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        for (effort, text) in [
-            (ReasoningEffort::Off, "none"),
-            (ReasoningEffort::Minimal, "minimal"),
-            (ReasoningEffort::Low, "low"),
-            (ReasoningEffort::Medium, "medium"),
-            (ReasoningEffort::High, "high"),
-        ] {
-            let s = translate_custom(Some(effort));
-            save(&path, &s).unwrap();
-            let file = std::fs::read_to_string(&path).unwrap();
-            assert!(
-                file.contains(&format!("\"reasoning_effort\": \"{text}\"")),
-                "{file}"
-            );
-            assert_eq!(effort.as_str(), text);
-            assert_eq!(load(&path).unwrap(), s);
+        std::fs::write(&path, file).unwrap();
+        let s = load(&path).unwrap();
+        save(&path, &s).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        (s, saved["translate"].clone())
+    }
+
+    fn saved_custom(extra_body: Value) -> Value {
+        serde_json::json!({
+            "kind": "custom",
+            "endpoint": {"base_url": "http://localhost:8000/v1", "model": ""},
+            "extra_body": extra_body,
+            "partial_interval_ms": 1500,
+        })
+    }
+
+    #[test]
+    fn an_old_model_moves_into_extra_body() {
+        let (s, saved) = load_and_save(&custom_file("gpt-test", ""));
+        let extra = serde_json::json!({"model": "gpt-test"});
+        assert_eq!(s, translate_custom(extra.clone()));
+        assert_eq!(saved, saved_custom(extra));
+    }
+
+    #[test]
+    fn an_old_reasoning_effort_moves_into_extra_body() {
+        for effort in ["none", "minimal", "low", "medium", "high"] {
+            let (s, saved) = load_and_save(&custom_file(
+                "gpt-test",
+                &format!(r#","reasoning_effort":"{effort}""#),
+            ));
+            let extra = serde_json::json!({"model": "gpt-test", "reasoning_effort": effort});
+            assert_eq!(s, translate_custom(extra.clone()));
+            assert_eq!(saved, saved_custom(extra));
         }
     }
 
     #[test]
-    fn default_reasoning_effort_is_not_written() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        save(&path, &translate_custom(None)).unwrap();
-        let file = std::fs::read_to_string(&path).unwrap();
-        assert!(!file.contains("reasoning_effort"), "{file}");
-        assert_eq!(load(&path).unwrap(), translate_custom(None));
+    fn a_model_in_extra_body_wins_over_the_old_field() {
+        let (s, saved) = load_and_save(&custom_file("old", r#","extra_body":{"model":"new"}"#));
+        let extra = serde_json::json!({"model": "new"});
+        assert_eq!(s, translate_custom(extra.clone()));
+        assert_eq!(saved, saved_custom(extra));
     }
 
     #[test]
-    fn a_file_from_before_reasoning_effort_and_partial_interval_loads_with_defaults() {
+    fn a_file_without_model_and_extra_body_loads_with_an_empty_one() {
+        let (s, saved) = load_and_save(&custom_file("", ""));
+        assert_eq!(s, translate_custom(serde_json::json!({})));
+        assert!(saved.get("extra_body").is_none(), "{saved}");
+    }
+
+    #[test]
+    fn extra_body_round_trip_and_empty_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let s = translate_custom(serde_json::json!({
+            "model": "gpt-test",
+            "reasoning_effort": "low",
+            "temperature": 0.2,
+            "chat_template_kwargs": {"enable_thinking": false},
+        }));
+        save(&path, &s).unwrap();
+        assert_eq!(load(&path).unwrap(), s);
+        save(&path, &translate_custom(serde_json::json!({}))).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(!file.contains("extra_body"), "{file}");
+        assert!(!file.contains("reasoning_effort"), "{file}");
+    }
+
+    #[test]
+    fn a_hand_edited_key_in_extra_body_is_not_used_or_saved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(
             &path,
-            r#"{"translate":{"kind":"custom","endpoint":{"base_url":"http://localhost:8000/v1","model":"gpt-test"}}}"#,
+            custom_file(
+                "",
+                r#","extra_body":{"top_p":0.9,"x":{"Api-Key":"LEAK1234"}}"#,
+            ),
         )
         .unwrap();
-        assert_eq!(load(&path).unwrap(), translate_custom(None));
+        let s = load(&path).unwrap();
+        assert_eq!(s, translate_custom(serde_json::json!({})));
+        save(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("LEAK1234"), "{text}");
     }
 
     /// The ids of the sherpa-onnx Whisper models (before 2026-11-09) are now

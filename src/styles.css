@@ -167,8 +167,13 @@ main > [role="tabpanel"] { height: 100%; }
 input.inp { width: 100%; }
 .inp.mono { font-family: var(--mono); font-size: 12px; }
 output.inp { background: var(--a-side); overflow: hidden; }
+textarea.inp { display: block; width: 100%; height: auto; min-height: 96px; padding: 7px 10px; line-height: 1.6; resize: vertical; white-space: pre; overflow-x: auto; }
+.inp[aria-invalid="true"] { border-color: var(--a-err); }
+.fld > .top-lab { align-self: start; padding-top: 7px; }
+.stack { display: grid; gap: 6px; min-width: 0; }
 .inp::placeholder { color: var(--a-ink-3); opacity: 1; }
 .fhint { font-size: 12px; color: var(--a-ink-3); }
+.fhint.errtext { color: var(--a-err); }
 .row2 { display: flex; gap: 8px; align-items: center; }
 .row2.end { justify-content: flex-end; }
 .row2 .grow, .grow { flex: 1; min-width: 0; }

@@ -7,7 +7,8 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | Command | Args | Returns |
 |---|---|---|
 | `get_settings` | – | `Settings` |
-| `save_settings` | `{ settings: Settings }` | – (a running session uses the new `target_language` from the next utterance) |
+| `save_settings` | `{ settings: Settings }` | – (a running session uses the new `target_language` from the next utterance; refuses a custom translation `extra_body` that `check_extra_body` refuses) |
+| `check_extra_body` | `{ text }` | – (rejects with the reason if the text is not a JSON object for `extra_body`, has an API key, sets `messages` or `stream`, or has a `model` that is not a non-empty string; blank text is `{}`. `extra_body.model` is the translation model; `endpoint.model` of translate is always `""`) |
 | `set_api_key` | `{ role: "asr"\|"translate", baseUrl, key }` | – |
 | `delete_api_key` | `{ role, baseUrl }` | – |
 | `api_key_hint` | `{ role, baseUrl }` | `string \| null` (for example `"••••3f9a"`) |

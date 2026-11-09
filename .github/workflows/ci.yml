@@ -127,8 +127,9 @@ jobs:
         run: cargo test secrets -- --ignored
 
   # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
-  # E2B): engine::tests::pipeline_end_to_end; Whisper small (whisper.cpp):
-  # speech::whisper. Manual runs only (about 3.9 GB of models, cached).
+  # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*;
+  # Whisper small (whisper.cpp): speech::whisper. Manual runs only (about 4.2 GB
+  # of models, cached).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'e2e' }}
     strategy:
@@ -175,6 +176,11 @@ jobs:
       - name: Whisper (whisper.cpp) on real clips
         working-directory: src-tauri
         run: cargo test --lib speech::whisper::tests::whisper_on_real_clips -- --ignored --nocapture
+      - name: Local translation with context
+        working-directory: src-tauri
+        env:
+          MORAGO_TEST_MODELS_DIR: ${{ github.workspace }}/e2e/models
+        run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture --test-threads=1
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs with job=bundle.
   bundle:

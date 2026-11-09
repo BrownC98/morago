@@ -44,6 +44,8 @@ export interface App {
   setTab: (t: Tab) => void;
   settings: Settings | null;
   updateSettings: (patch: Partial<Settings>) => void;
+  /** Resolves when the queued saves finish: false if the last one failed. */
+  settled: () => Promise<boolean>;
   saveState: SaveState;
   models: ModelInfo[];
   downloads: Record<string, Download>;
@@ -149,7 +151,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastId = useRef(0);
-  const saveChain = useRef<Promise<void>>(Promise.resolve());
+  const saveChain = useRef<Promise<boolean>>(Promise.resolve(true));
   const settingsRef = useRef<Settings | null>(null);
 
   const notify = useCallback<App["notify"]>((kind, text, action) => {
@@ -258,16 +260,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
           () => {
             setSaveState(settingsRef.current === next ? "saved" : "saving");
             if ("gpu" in patch || "translate" in patch || "asr" in patch) refreshGpu();
+            return true;
           },
           (e) => {
             setSaveState("error");
             notify("error", errText(e));
+            return false;
           },
         ),
       );
     },
     [notify, refreshGpu],
   );
+  const settled = useCallback(() => saveChain.current, []);
 
   const startDownload = useCallback(
     (id: string) => {
@@ -358,6 +363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTab,
       settings,
       updateSettings,
+      settled,
       saveState,
       models,
       downloads,
@@ -394,6 +400,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tab,
       settings,
       updateSettings,
+      settled,
       saveState,
       models,
       downloads,
