@@ -30,6 +30,7 @@ let settings: Settings = {
     extra_body: { model: "gpt-4o-mini" },
     partial_interval_ms: 1500,
   },
+  translate_context_lines: 4,
   diarize: true,
   capture_mic: true,
   capture_system: true,

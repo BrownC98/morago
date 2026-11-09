@@ -43,7 +43,11 @@ pub(crate) struct LocalTranslator {
 
 impl LocalTranslator {
     /// Loads `<models_dir>/<model_id>/model.gguf` once.
-    pub(crate) fn load(models_dir: &Path, model_id: &str) -> anyhow::Result<Self> {
+    pub(crate) fn load(
+        models_dir: &Path,
+        model_id: &str,
+        history: History,
+    ) -> anyhow::Result<Self> {
         let path = models_dir.join(model_id).join("model.gguf");
         if !path.is_file() {
             return Err(anyhow!(
@@ -62,25 +66,48 @@ impl LocalTranslator {
             model,
             label: format!("로컬 {}", crate::models::display_name(model_id)),
             threads,
-            history: History::default(),
+            history,
         })
     }
 
     /// Stops with an error before the next token when `stop` returns true.
+    /// Leaves out the oldest context lines that do not fit the model context.
     fn generate(
         &self,
-        system: &str,
         text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
         let backend = backend()?;
-        let prompt = gemma4_prompt(system, text);
         let vocab = self.model.vocab();
-        let prompt_tokens = vocab.tokenize(prompt.as_bytes(), true, true);
         let text_tokens = vocab.tokenize(text.as_bytes(), false, false).len();
         // Output is at most about 3x the input tokens.
         let max_new = text_tokens * 3 + 32;
-        let n_ctx = (prompt_tokens.len() + max_new + 8).min(self.model.n_ctx_train() as usize);
+        let limit = self.model.n_ctx_train() as usize;
+        let lines = self.history.lines();
+        let mut line_tokens: Vec<usize> = Vec::new();
+        let mut skip = 0;
+        let prompt_tokens = loop {
+            let system = system_prompt(source_language, target_language, lines.range(skip..));
+            let tokens = vocab.tokenize(gemma4_prompt(&system, text).as_bytes(), true, true);
+            let need = tokens.len() + max_new + 8;
+            if need <= limit || skip == lines.len() {
+                break tokens;
+            }
+            if line_tokens.is_empty() {
+                line_tokens = lines
+                    .iter()
+                    .map(|l| {
+                        vocab
+                            .tokenize(format!("\n- {l}").as_bytes(), false, false)
+                            .len()
+                    })
+                    .collect();
+            }
+            skip += lines_to_drop(need - limit, &line_tokens[skip..]);
+        };
+        let n_ctx = (prompt_tokens.len() + max_new + 8).min(limit);
         if prompt_tokens.len() + 1 >= n_ctx {
             return Err(anyhow!("문장이 너무 길어 번역하지 못했습니다"));
         }
@@ -121,8 +148,10 @@ impl LocalTranslator {
         target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
-        let system = system_prompt(source_language, target_language, &self.history);
-        let translation = clean_output(&self.generate(&system, text, stop)?, text);
+        let translation = clean_output(
+            &self.generate(text, source_language, target_language, stop)?,
+            text,
+        );
         if translation.is_empty() {
             return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
         }
@@ -159,6 +188,22 @@ impl Translator for LocalTranslator {
     }
 }
 
+/// Count of the oldest lines (token counts in `line_tokens`, oldest first)
+/// to leave out so that the prompt is `over` tokens shorter. At least 1, at
+/// most all lines.
+fn lines_to_drop(over: usize, line_tokens: &[usize]) -> usize {
+    let mut cut = 0;
+    let mut n = 0;
+    for &t in line_tokens {
+        if cut >= over {
+            break;
+        }
+        cut += t;
+        n += 1;
+    }
+    n.max(1).min(line_tokens.len())
+}
+
 /// Gemma 4 chat format, thinking off (from the model's chat_template.jinja,
 /// 2026-07-09). llama.cpp's legacy template function does not know Gemma 4.
 /// No `<bos>`: tokenizing with `add_bos` adds it.
@@ -184,9 +229,23 @@ mod tests {
     }
 
     #[test]
+    fn a_long_prompt_drops_the_oldest_lines_first() {
+        // Lines of 10, 20, 30 and 40 tokens, oldest first.
+        let lines = [10, 20, 30, 40];
+        assert_eq!(lines_to_drop(1, &lines), 1);
+        assert_eq!(lines_to_drop(10, &lines), 1);
+        assert_eq!(lines_to_drop(11, &lines), 2);
+        assert_eq!(lines_to_drop(60, &lines), 3);
+        assert_eq!(lines_to_drop(100, &lines), 4);
+        // Too long even without context: all lines go, no more.
+        assert_eq!(lines_to_drop(1000, &lines), 4);
+        assert_eq!(lines_to_drop(5, &lines[3..]), 1);
+    }
+
+    #[test]
     fn missing_model_gives_korean_error() {
         let dir = std::env::temp_dir().join("morago-no-such-models");
-        let err = LocalTranslator::load(&dir, "gemma-4-e2b-it-q4")
+        let err = LocalTranslator::load(&dir, "gemma-4-e2b-it-q4", History::new(4))
             .err()
             .unwrap()
             .to_string();
@@ -214,7 +273,7 @@ mod tests {
     fn local_model_translates() {
         let dir = ensure_model();
         let model_started = Instant::now();
-        let mut t = LocalTranslator::load(&dir, MODEL_ID).unwrap();
+        let mut t = LocalTranslator::load(&dir, MODEL_ID, History::new(4)).unwrap();
         println!(
             "label: {}; load: {:.1?}",
             t.label(),
@@ -250,7 +309,7 @@ mod tests {
     #[ignore = "downloads a 3.3 GB model and runs it on the CPU"]
     fn local_model_context_does_not_leak() {
         let dir = ensure_model();
-        let mut t = LocalTranslator::load(&dir, MODEL_ID).unwrap();
+        let mut t = LocalTranslator::load(&dir, MODEL_ID, History::new(4)).unwrap();
         let lines = [
             "Let's review the contract with Hanbit before we sign.",
             "Section four is the part I'm worried about.",

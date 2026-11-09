@@ -24,7 +24,7 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `load_session` | `{ id }` | `{ meta: SessionMeta, utterances: Utterance[] }` |
 | `update_session_meta` | `{ meta: SessionMeta }` | – (title, speaker names) |
 | `delete_session` | `{ id }` | – |
-| `export_session` | `{ id, format: "markdown"\|"srt"\|"json", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
+| `export_session` | `{ id, format: "markdown"\|"srt"\|"json"\|"csv", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
 
 Errors: a command rejects with a Korean user-facing string that names the problem and the fix. It never contains an API key.
 

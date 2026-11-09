@@ -1,6 +1,6 @@
-//! Export texts: Markdown, SRT, JSON.
+//! Export texts: Markdown, SRT, JSON, CSV.
 
-use crate::types::{SessionMeta, TranslationState, Utterance};
+use crate::types::{SessionMeta, SourceKind, TranslationState, Utterance};
 use std::fmt::Write;
 
 /// Display name on one line: the user's name, else "화자 N" for "SN", else
@@ -123,4 +123,93 @@ pub(super) fn json(meta: &SessionMeta, utterances: &[Utterance]) -> anyhow::Resu
         utterances: &'a [Utterance],
     }
     Ok(serde_json::to_string_pretty(&Export { meta, utterances })?)
+}
+
+const CSV_HEADER: [&str; 14] = [
+    "번호",
+    "입력",
+    "화자 ID",
+    "화자 이름",
+    "시작",
+    "종료",
+    "시작_ms",
+    "종료_ms",
+    "원문 언어",
+    "원문",
+    "번역 상태",
+    "번역 언어",
+    "번역문",
+    "번역 오류",
+];
+
+/// One CSV field (RFC 4180). A spreadsheet runs a cell that starts with
+/// `= + - @`, tab or CR as a formula: an apostrophe before it keeps it text.
+fn csv_field(out: &mut String, text: &str) {
+    let guard = text.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    if guard || text.contains([',', '"', '\r', '\n']) {
+        out.push('"');
+        if guard {
+            out.push('\'');
+        }
+        out.push_str(&text.replace('"', "\"\""));
+        out.push('"');
+    } else {
+        out.push_str(text);
+    }
+}
+
+fn csv_row<S: AsRef<str>>(out: &mut String, fields: &[S]) {
+    for (i, f) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        csv_field(out, f.as_ref());
+    }
+    out.push_str("\r\n");
+}
+
+/// One row per utterance, all fields as stored. UTF-8 with BOM: Excel
+/// reads a file without it in the local code page.
+pub(super) fn csv(meta: &SessionMeta, utterances: &[Utterance]) -> String {
+    let mut out = String::from('\u{feff}');
+    csv_row(&mut out, &CSV_HEADER);
+    for u in utterances {
+        let (state, target, text, error) = match &u.translation {
+            TranslationState::Pending => ("번역하는 중", "", "", ""),
+            TranslationState::Done { target, text } => ("완료", target.as_str(), text.as_str(), ""),
+            TranslationState::SameLanguage => ("같은 언어", "", "", ""),
+            TranslationState::Failed { message } => ("실패", "", "", message.as_str()),
+        };
+        let source = match u.source {
+            SourceKind::Mic => "마이크",
+            SourceKind::System => "시스템 소리",
+        };
+        let id = u.id.to_string();
+        let start = format!("{}.{:03}", clock(u.start_ms), u.start_ms % 1000);
+        let end = format!("{}.{:03}", clock(u.end_ms), u.end_ms % 1000);
+        let start_ms = u.start_ms.to_string();
+        let end_ms = u.end_ms.to_string();
+        csv_row(
+            &mut out,
+            &[
+                id.as_str(),
+                source,
+                &u.speaker,
+                meta.speaker_names
+                    .get(&u.speaker)
+                    .map_or("", String::as_str),
+                &start,
+                &end,
+                &start_ms,
+                &end_ms,
+                u.language.as_deref().unwrap_or(""),
+                &u.original,
+                state,
+                target,
+                text,
+                error,
+            ],
+        );
+    }
+    out
 }
