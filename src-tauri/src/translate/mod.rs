@@ -191,7 +191,7 @@ pub(crate) fn system_prompt<'a>(
 /// True when `text` has letters that the target language never uses: kana
 /// in Korean or Chinese, Hangul in Japanese or Chinese. Other targets: false.
 pub(crate) fn wrong_script(text: &str, target_language: &str) -> bool {
-    let kana = |c: char| matches!(c, '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9F}');
+    let kana = |c: char| matches!(c, '\u{3040}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9F}');
     let hangul = |c: char| matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}');
     let base = target_language.split(['-', '_']).next().unwrap_or("");
     let never: &dyn Fn(char) -> bool = match base.to_ascii_lowercase().as_str() {
@@ -217,7 +217,7 @@ pub(crate) fn in_target_script(
     let second = attempt(true)?;
     if wrong_script(&second, target_language) {
         return Err(anyhow::anyhow!(
-            "번역 모델이 설정한 언어가 아닌 다른 언어로 답했습니다"
+            "번역문이 설정한 언어가 아닌 다른 언어로 나왔습니다"
         ));
     }
     Ok(second)
@@ -385,6 +385,8 @@ mod tests {
         assert!(wrong_script("程度の二つのところがあるわけであって", "ko"));
         assert!(!wrong_script("그 연쇄 장치로 가열해서 재료를.", "ko"));
         assert!(!wrong_script("田中 씨가 OK라고 했습니다.", "ko"));
+        // The katakana middle dot is punctuation that a translation keeps.
+        assert!(!wrong_script("도쿄・오사카", "ko"));
         assert!(wrong_script("会議は 내일です", "ja"));
         assert!(!wrong_script("会議は明日です", "ja"));
         assert!(wrong_script("ミーティング", "zh-CN"));
@@ -412,7 +414,11 @@ mod tests {
             n += 1;
             Ok("こんにちは".to_string())
         });
-        assert!(out.unwrap_err().to_string().contains("다른 언어"));
+        assert!(
+            out.unwrap_err()
+                .to_string()
+                .contains("다른 언어로 나왔습니다")
+        );
         assert_eq!(n, 2);
 
         let mut n = 0;
