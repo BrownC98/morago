@@ -1208,6 +1208,13 @@ mod tests {
             .try_init();
     }
 
+    fn first_gpu() -> Option<usize> {
+        llama_cpp_2::list_llama_ggml_backend_devices()
+            .into_iter()
+            .find(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
+            .map(|d| d.index)
+    }
+
     /// Free memory of each GPU, MiB.
     fn free_gpu_mib() -> Vec<usize> {
         llama_cpp_2::list_llama_ggml_backend_devices()
@@ -1373,11 +1380,11 @@ mod tests {
             let on_gpu = p.asr_device.as_ref().is_some_and(|d| d.gpu);
             let partials = partials && partial::enabled(&settings.asr, on_gpu);
             let cpu = cpu_time();
-            let t0 = feed_in_real_time(&p, &chunks);
-            let lowest = free_gpu_mib();
+            let gpu = first_gpu();
+            let (t0, lowest) = gpu::lowest_free_while(gpu, || feed_in_real_time(&p, &chunks));
             let (_, _, utterances) = finish(p, root.path(), &store);
             let wall = t0.elapsed();
-            println!("free GPU memory at the end of the audio: {lowest:?} MiB");
+            println!("lowest free GPU memory during the audio: {lowest:?} MiB");
             let cpu = cpu.zip(cpu_time()).map(|(a, b)| b - a);
             println!(
                 "=== partials {}: wall {wall:.1?}, CPU {cpu:.1?}, CPU/wall {}",

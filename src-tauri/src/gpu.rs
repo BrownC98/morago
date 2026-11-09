@@ -408,6 +408,31 @@ pub fn free_memory(index: usize) -> Option<u64> {
         .map(|d| d.memory_free as u64)
 }
 
+/// Runs `f` and gives the lowest free memory of GPU `index` in MiB while it
+/// runs (read every 20 ms), for the memory tests with real models.
+#[cfg(test)]
+pub fn lowest_free_while<T>(index: Option<usize>, f: impl FnOnce() -> T) -> (T, Option<u64>) {
+    let Some(index) = index else {
+        return (f(), None);
+    };
+    let done = AtomicBool::new(false);
+    let lowest = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let out = std::thread::scope(|s| {
+        s.spawn(|| {
+            while !done.load(Ordering::Relaxed) {
+                if let Some(free) = free_memory(index) {
+                    lowest.fetch_min(free >> 20, Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let out = f();
+        done.store(true, Ordering::Relaxed);
+        out
+    });
+    (out, Some(lowest.load(Ordering::Relaxed)))
+}
+
 /// whisper.cpp numbers only the GPU devices of ggml (`gpu_device`).
 pub fn gpu_ordinal(index: usize) -> i32 {
     list_llama_ggml_backend_devices()

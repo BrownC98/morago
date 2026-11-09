@@ -374,8 +374,7 @@ mod tests {
     /// `MORAGO_TEST_BENCH=<dir>` with `<lang>/<id>.wav`: transcribes each
     /// file in the language of its folder (`MORAGO_TEST_BENCH_AUTO=1`: the
     /// model chooses) and prints one JSON line per file and the RTF. The
-    /// `partial` session runs each file too (not timed), as in a meeting, for
-    /// the lowest free GPU memory.
+    /// `partial` session runs each file too (not timed), as in a meeting.
     fn bench(models_dir: &Path, place: &Placement, partial: &mut FunAsr) {
         let Ok(dir) = std::env::var("MORAGO_TEST_BENCH") else {
             return;
@@ -387,7 +386,7 @@ mod tests {
             .filter(|p| p.is_dir())
             .collect();
         langs.sort();
-        let (mut audio, mut took, mut lowest) = (0.0, 0.0, free_mib(place));
+        let (mut audio, mut took) = (0.0, 0.0);
         for folder in langs {
             let lang = folder.file_name().unwrap().to_str().unwrap().to_string();
             let mut asr =
@@ -408,7 +407,6 @@ mod tests {
                 took += dec_s;
                 audio += sec;
                 partial.transcribe(&seg).unwrap();
-                lowest = lowest.min(free_mib(place));
                 println!(
                     "BENCH {}",
                     serde_json::json!({
@@ -419,7 +417,7 @@ mod tests {
             }
         }
         println!(
-            "bench {}: {audio:.1} s audio, {took:.2} s, RTF {:.3}; lowest free GPU memory {lowest:?} MiB",
+            "bench {}: {audio:.1} s audio, {took:.2} s, RTF {:.3}",
             place.status.detail,
             took / audio,
         );
@@ -478,7 +476,9 @@ mod tests {
         assert_eq!(partial.transcribe(&seg).unwrap().text, text);
         println!("free GPU memory after the runs: {:?} MiB", free_mib(&place));
         drop(asr);
-        bench(&models_dir, &place, &mut partial);
+        let gpu = place.gpu.as_ref().map(|(i, _)| *i);
+        let ((), lowest) = gpu::lowest_free_while(gpu, || bench(&models_dir, &place, &mut partial));
+        println!("lowest free GPU memory in the bench: {lowest:?} MiB");
         drop(partial);
 
         // Meeting language: the result carries it.
