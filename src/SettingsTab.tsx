@@ -246,8 +246,8 @@ const DEFAULT_EXTRA_BODY: ExtraBody = { model: "gpt-5-mini", reasoning_effort: "
 
 const isEmpty = (body?: ExtraBody) => !body || Object.keys(body).length === 0;
 
-/** Text of a saved `extra_body`: the default body for an empty object. */
-const extraBodyText = (body?: ExtraBody) => JSON.stringify(isEmpty(body) ? DEFAULT_EXTRA_BODY : body, null, 2);
+/** Text of a saved `extra_body`: blank for an empty object. */
+const extraBodyText = (body?: ExtraBody) => (isEmpty(body) ? "" : JSON.stringify(body, null, 2));
 
 /** `extra_body` of a custom translation server as JSON text. The core checks it, live and on save. */
 function ExtraBodyField({
