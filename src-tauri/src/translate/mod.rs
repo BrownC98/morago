@@ -208,7 +208,8 @@ pub(crate) fn wrong_script(text: &str, target_language: &str) -> bool {
 }
 
 /// Runs `attempt(false)`. When its output is in a wrong script
-/// (`wrong_script`), runs `attempt(true)` once: its prompt insists on the target.
+/// (`wrong_script`), runs `attempt(true)` once: its prompt insists on the
+/// target. Returns that second answer as it is.
 pub(crate) fn in_target_script(
     target_language: &str,
     mut attempt: impl FnMut(bool) -> anyhow::Result<String>,
@@ -218,13 +219,7 @@ pub(crate) fn in_target_script(
         return Ok(first);
     }
     log::warn!("translation not in {target_language}, retrying once");
-    let second = attempt(true)?;
-    if wrong_script(&second, target_language) {
-        return Err(anyhow::anyhow!(
-            "번역문이 설정한 언어가 아닌 다른 언어로 나왔습니다"
-        ));
-    }
-    Ok(second)
+    attempt(true)
 }
 
 /// Removes what chat models add around a translation: reasoning blocks,
@@ -424,11 +419,8 @@ mod tests {
             n += 1;
             Ok("こんにちは".to_string())
         });
-        assert!(
-            out.unwrap_err()
-                .to_string()
-                .contains("다른 언어로 나왔습니다")
-        );
+        // A second wrong answer is still shown.
+        assert_eq!(out.unwrap(), "こんにちは");
         assert_eq!(n, 2);
 
         let mut n = 0;

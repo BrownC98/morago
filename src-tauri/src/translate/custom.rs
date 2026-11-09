@@ -1,6 +1,6 @@
 //! OpenAI-compatible chat completions provider.
 
-use super::{History, Translator, clean_output, in_target_script, system_prompt, wrong_script};
+use super::{History, Translator, clean_output, in_target_script, system_prompt};
 use crate::secrets::Secret;
 use anyhow::{Context, anyhow};
 use crossbeam_channel::RecvTimeoutError;
@@ -341,7 +341,6 @@ impl Translator for CustomTranslator {
     }
 
     /// One request with the current parameters: no retry, no history push, no notice.
-    /// An answer in a wrong script (`wrong_script`) is an error.
     /// The request runs on its own thread. When `stop` returns true, this
     /// returns at once and the reply is dropped, so a final utterance does not
     /// wait for a slow server.
@@ -375,9 +374,6 @@ impl Translator for CustomTranslator {
         let translation = clean_output(&parse_content(&response_text)?, text);
         if translation.is_empty() {
             return Err(anyhow!("번역 서버가 빈 번역문을 돌려주었습니다"));
-        }
-        if wrong_script(&translation, target_language) {
-            return Err(anyhow!("번역 서버가 다른 언어로 답했습니다"));
         }
         Ok(translation)
     }
