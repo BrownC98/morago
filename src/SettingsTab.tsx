@@ -563,14 +563,12 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom")
-            set(
-              custom(
-                lastEndpoint.current,
-                isEmpty(lastExtra.current) ? DEFAULT_EXTRA_BODY : lastExtra.current,
-                lastInterval.current,
-              ),
-            );
+          if (k === "custom") {
+            const extra = isEmpty(lastExtra.current) ? DEFAULT_EXTRA_BODY : lastExtra.current;
+            // A draft that is not the saved body would hide the default.
+            if (extra === DEFAULT_EXTRA_BODY) extraText.current = null;
+            set(custom(lastEndpoint.current, extra, lastInterval.current));
+          }
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
