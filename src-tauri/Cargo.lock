@@ -2759,6 +2759,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "thiserror 2.0.21",
+ "transcribe-cpp",
  "uuid",
  "whisper-rs",
  "windows-native-keyring-store",
@@ -5226,6 +5227,25 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "transcribe-cpp"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bab65d30f5a4c3ea0ab6f38236823389f3914b0605bbc0073a4ec88018c0714"
+dependencies = [
+ "log",
+ "thiserror 2.0.21",
+ "transcribe-cpp-sys",
+]
+
+[[package]]
+name = "transcribe-cpp-sys"
+version = "0.4.1"
+dependencies = [
+ "cmake",
+ "llama-cpp-sys-2",
 ]
 
 [[package]]
