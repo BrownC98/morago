@@ -188,19 +188,23 @@ pub(crate) fn system_prompt<'a>(
     prompt
 }
 
-/// True when `text` has letters that the target language never uses: kana
-/// in Korean or Chinese, Hangul in Japanese or Chinese. Other targets: false.
+/// True when `text` has fewer letters of the target script than of scripts
+/// that the target never uses: kana for Korean, Hangul for Japanese, both for
+/// Chinese. A few source words in brackets do not count against it. Other targets: false.
 pub(crate) fn wrong_script(text: &str, target_language: &str) -> bool {
     let kana = |c: char| matches!(c, '\u{3040}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9F}');
     let hangul = |c: char| matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}');
+    let han = |c: char| matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}');
     let base = target_language.split(['-', '_']).next().unwrap_or("");
-    let never: &dyn Fn(char) -> bool = match base.to_ascii_lowercase().as_str() {
-        "ko" => &kana,
-        "ja" => &hangul,
-        "zh" => &|c| kana(c) || hangul(c),
-        _ => return false,
-    };
-    text.chars().any(never)
+    let (own, foreign): (&dyn Fn(char) -> bool, &dyn Fn(char) -> bool) =
+        match base.to_ascii_lowercase().as_str() {
+            "ko" => (&hangul, &kana),
+            "ja" => (&|c| kana(c) || han(c), &hangul),
+            "zh" => (&han, &|c| kana(c) || hangul(c)),
+            _ => return false,
+        };
+    let count = |f: &dyn Fn(char) -> bool| text.chars().filter(|&c| f(c)).count();
+    count(foreign) > count(own)
 }
 
 /// Runs `attempt(false)`. When its output is in a wrong script
@@ -387,7 +391,13 @@ mod tests {
         assert!(!wrong_script("田中 씨가 OK라고 했습니다.", "ko"));
         // The katakana middle dot is punctuation that a translation keeps.
         assert!(!wrong_script("도쿄・오사카", "ko"));
-        assert!(wrong_script("会議は 내일です", "ja"));
+        // A source word kept beside the translation.
+        assert!(!wrong_script(
+            "레지스트(レジスト)를 제거하고 결정화(結晶化)합니다.",
+            "ko"
+        ));
+        assert!(wrong_script("会議 내일입니다", "ja"));
+        assert!(!wrong_script("会議は明日（내일）です", "ja"));
         assert!(!wrong_script("会議は明日です", "ja"));
         assert!(wrong_script("ミーティング", "zh-CN"));
         assert!(!wrong_script("会议在明天", "zh"));
