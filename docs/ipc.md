@@ -15,9 +15,10 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `test_provider` | `{ role }` | `{ ok: boolean, message: string }` (uses the saved settings and key) |
 | `list_mics` | – | `string[]` |
 | `system_audio_support` | – | `{ supported: boolean, reason: string \| null }` |
-| `list_models` | – | `(ModelInfo & { installed: boolean })[]` |
-| `download_model` | `{ id }` | – (returns at once; progress by events) |
+| `list_models` | – | `(ModelInfo & { installed: boolean, on_disk: boolean })[]` (`on_disk`: the model folder exists, also with files that the app cannot use, for example the sherpa-onnx Whisper files of before 2026-11-09) |
+| `download_model` | `{ id }` | – (returns at once; progress by events). The id of `GpuStatus.pack` downloads the GPU pack. |
 | `cancel_download` | `{ id }` | – |
+| `delete_model` | `{ id }` | – (deletes the model folder; refused while a meeting runs or the model downloads) |
 | `start_session` | `{ title: string \| null }` | `SessionMeta` |
 | `stop_session` | – | `SessionSummary` |
 | `list_sessions` | – | `SessionSummary[]` (newest first) |
@@ -25,6 +26,8 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `update_session_meta` | `{ meta: SessionMeta }` | – (title, speaker names) |
 | `delete_session` | `{ id }` | – |
 | `export_session` | `{ id, format: "markdown"\|"srt"\|"json"\|"csv", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
+| `gpu_status` | – | `GpuStatus` (`gpu.rs`): GPU names, hint, GPU pack, devices of the local translation model (`translate`) and the local speech recognition model (`asr`), of the running session, else of the settings. `null`: a service does the work |
+| `restart_app` | – | – (refused while a session runs; a new GPU pack is used after a restart) |
 
 Errors: a command rejects with a Korean user-facing string that names the problem and the fix. It never contains an API key.
 
@@ -36,6 +39,6 @@ Errors: a command rejects with a Korean user-facing string that names the proble
 | `utterance-partial` | `PartialText` `{ source, start_ms, text, translation: string \| null }`: live text of speech that has not ended, about every 0.7 s, and its provisional translation (can be of an older, shorter text). Sent only with the local SenseVoice Small ASR; partial translations with a local model only on a GPU (macOS Metal), or with a custom server at most once per `partial_interval_ms` of the translate settings (`null`: none). Show one grey line per source. Remove it when an `utterance` of that source has `end_ms > start_ms` (the final of that speech; not an update of an older utterance). An empty `text` (any ASR: the speech gave no utterance) removes the line of that source if the line has a smaller `start_ms`. No partial of a speech comes after its utterance. |
 | `audio-level` | `{ source: "mic"\|"system", rms: number }` (0..1, about 10 per second while running) |
 | `session-state` | `{ running: boolean, sessionId: string \| null, startedAt: string \| null }` |
-| `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model"\|"notice", source: "mic"\|"system"\|null, message: string }`. Stage `notice` (a setting the server does not support, skipped work when a queue is full) is shown as a toast; the other stages show in the status bar until the next good result. |
+| `engine-error` | `{ stage: "capture"\|"asr"\|"translate"\|"store"\|"model"\|"notice"\|"session", source: "mic"\|"system"\|null, message: string }`. Stage `notice` (a setting the server does not support, skipped work when a queue is full) is shown as a toast. Stage `session`: the core stopped and saved the session after a GPU error (a `session-state` event comes first); the UI shows it in the live feed. The other stages show in the status bar until the next good result. |
 | `model-download` | `DownloadProgress` |
 | `model-download-done` | `{ modelId: string, error: string \| null }` |

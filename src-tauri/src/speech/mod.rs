@@ -6,7 +6,10 @@ mod diarize;
 mod local;
 mod vad;
 mod wav;
+mod whisper;
 
+use crate::gpu::Placement;
+use crate::models;
 use crate::secrets::{self, Role};
 use crate::settings::AsrConfig;
 use crate::types::{SpeechSegment, Transcript};
@@ -29,12 +32,19 @@ pub trait Asr: Send {
 /// `language` (ISO 639-1, `Settings::meeting_language`): `None` = detect per
 /// segment; else the ASR uses it and returns it as `Transcript::language`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
+/// `placement`: the device of a Whisper model; the other models use the CPU.
 pub fn build_asr(
     config: &AsrConfig,
     language: Option<&str>,
     models_dir: &Path,
+    placement: &Placement,
 ) -> anyhow::Result<Box<dyn Asr>> {
     match config {
+        AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
+            Ok(Box::new(whisper::WhisperAsr::new(
+                models_dir, model_id, language, placement,
+            )?))
+        }
         AsrConfig::Local { model_id } => Ok(Box::new(local::LocalAsr::new(
             models_dir, model_id, language,
         )?)),
@@ -52,12 +62,11 @@ mod tests {
     //! Optional: `MORAGO_TEST_MODELS=<dir>` (model cache), `MORAGO_TEST_ASR=<id>` (default sense-voice-small).
     //! Wav files in `<dir>` (16 kHz mono): en0, en1, sv_ko, sv_ja, sv_zh, sv_en, sv_yue.
     use super::*;
-    use crate::models;
     use crate::types::{AudioChunk, SAMPLE_RATE, SourceKind};
     use std::collections::BTreeSet;
     use std::sync::atomic::AtomicBool;
 
-    fn read_wav(dir: &Path, name: &str) -> Vec<f32> {
+    pub(super) fn read_wav(dir: &Path, name: &str) -> Vec<f32> {
         let path = dir.join(format!("{name}.wav"));
         sherpa_onnx::Wave::read(path.to_str().unwrap())
             .unwrap_or_else(|| panic!("cannot read {}", path.display()))
@@ -65,7 +74,7 @@ mod tests {
             .to_vec()
     }
 
-    fn ensure_model(models_dir: &Path, id: &str) {
+    pub(super) fn ensure_model(models_dir: &Path, id: &str) {
         if models::is_installed(models_dir, id) {
             return;
         }
@@ -121,6 +130,7 @@ mod tests {
             },
             None,
             &models_dir,
+            &Placement::cpu(""),
         )
         .unwrap();
         println!("ASR: {}", asr.label());

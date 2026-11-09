@@ -2,12 +2,13 @@
 //! -> storage -> UI events. Each stage runs on its own thread and the
 //! stages talk through channels, so a slow stage does not stop capture.
 
+use crate::gpu::{self, GpuFailure, Placement};
 use crate::settings::{AsrConfig, Settings, TranslateConfig};
 use crate::speech::{self, Diarizer, Vad};
 use crate::store::{SessionStore, SessionWriter};
 use crate::translate::{self, needs_translation};
 use crate::types::{
-    AudioChunk, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
+    AudioChunk, ModelDevice, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
     TranslationState, Utterance,
 };
 use crate::{audio, models};
@@ -27,6 +28,8 @@ pub trait Sink: Send + Sync + 'static {
     fn utterance(&self, u: &Utterance);
     fn level(&self, source: SourceKind, rms: f32);
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str);
+    /// The session cannot go on (a GPU failure): stop and save it, then tell the user.
+    fn fault(&self, message: &str);
     fn partial(&self, p: &PartialText);
 }
 
@@ -64,12 +67,20 @@ impl Sink for AppHandle {
             },
         );
     }
+    fn fault(&self, message: &str) {
+        log::error!("engine fault: {message}");
+        crate::commands::stop_after_fault(self, message);
+    }
 }
 
 /// A running session.
 pub struct Running {
     pub meta: SessionMeta,
     pub target_language: Arc<RwLock<String>>,
+    /// Device of a local translation model.
+    pub translate_device: Option<ModelDevice>,
+    /// Device of a local speech recognition model.
+    pub asr_device: Option<ModelDevice>,
     captures: Vec<audio::Capture>,
     audio_tx: Option<Sender<AudioChunk>>,
     threads: Vec<JoinHandle<()>>,
@@ -116,6 +127,76 @@ struct Pipeline {
     audio_tx: Sender<AudioChunk>,
     threads: Vec<JoinHandle<()>>,
     writer: Arc<Mutex<Option<SessionWriter>>>,
+    translate_device: Option<ModelDevice>,
+    asr_device: Option<ModelDevice>,
+}
+
+/// Size of a downloaded model file (the catalog size before download).
+fn model_bytes(models_dir: &Path, model_id: &str, file: &str) -> u64 {
+    std::fs::metadata(models::path(models_dir, model_id).join(file))
+        .map(|m| m.len())
+        .unwrap_or_else(|_| {
+            models::catalog()
+                .into_iter()
+                .find(|m| m.id == model_id)
+                .map_or(0, |m| m.size_bytes)
+        })
+}
+
+/// Devices of the local models of a session.
+pub struct Placements {
+    /// `None`: a service translates.
+    pub translate: Option<Placement>,
+    /// `None`: a service recognizes speech.
+    pub asr: Option<Placement>,
+}
+
+/// The local models share the GPU. The translation model gets it first (the
+/// GPU makes it 4-8x faster); Whisper gets it if both fit, else the CPU.
+fn place_with(
+    settings: &Settings,
+    models_dir: &Path,
+    place: &dyn Fn(u64, u64) -> anyhow::Result<Placement>,
+) -> anyhow::Result<Placements> {
+    let translate = match &settings.translate {
+        TranslateConfig::Local { model_id } => {
+            let need = gpu::needed_memory(model_bytes(models_dir, model_id, "model.gguf"));
+            Some((place(need, 0)?, need))
+        }
+        TranslateConfig::Custom { .. } => None,
+    };
+    let beside = match &translate {
+        Some((p, need)) if p.gpu.is_some() => *need,
+        _ => 0,
+    };
+    let asr = match &settings.asr {
+        AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
+            let bytes = model_bytes(models_dir, model_id, models::WHISPER_FILE);
+            Some(place(gpu::whisper_memory(bytes, beside > 0), beside)?)
+        }
+        AsrConfig::Local { .. } => Some(Placement::cpu("이 모델은 CPU에서만 돌립니다.")),
+        AsrConfig::Custom { .. } => None,
+    };
+    Ok(Placements {
+        translate: translate.map(|(p, _)| p),
+        asr,
+    })
+}
+
+/// Devices for a session start. An error (the chosen GPU is missing) stops it.
+pub fn place_models(settings: &Settings, models_dir: &Path) -> anyhow::Result<Placements> {
+    place_with(settings, models_dir, &|need, beside| {
+        gpu::place_beside(&settings.gpu, need, beside)
+    })
+}
+
+/// Devices for the settings rows: an error shows as the CPU reason.
+pub fn model_devices(settings: &Settings, models_dir: &Path) -> Placements {
+    place_with(settings, models_dir, &|need, beside| {
+        Ok(gpu::place_beside(&settings.gpu, need, beside)
+            .unwrap_or_else(|e| Placement::cpu(e.to_string())))
+    })
+    .expect("no error")
 }
 
 /// Loads the models, creates the session file and starts the stage threads.
@@ -129,20 +210,34 @@ fn start_pipeline(
     sink: &Arc<dyn Sink>,
     partials: bool,
 ) -> anyhow::Result<Pipeline> {
-    let build_asr = || {
+    let Placements {
+        translate: translate_placement,
+        asr: asr_placement,
+    } = place_models(settings, models_dir)?;
+    let cpu = || Placement::cpu("");
+    let build_asr = |placement: &Placement| {
         speech::build_asr(
             &settings.asr,
             settings.meeting_language.as_deref(),
             models_dir,
+            placement,
         )
     };
-    let asr = build_asr()?;
-    let partial_asr = if partials { Some(build_asr()?) } else { None };
+    let asr = build_asr(asr_placement.as_ref().unwrap_or(&cpu()))?;
+    // On the CPU: the GPU memory check counts one Whisper model only.
+    let partial_asr = if partials {
+        Some(build_asr(&cpu())?)
+    } else {
+        None
+    };
     let translator = translate::build_translator(
         &settings.translate,
         settings.translate_context_lines as usize,
         models_dir,
+        translate_placement.as_ref().unwrap_or(&cpu()),
     )?;
+    let translate_device = translate_placement.map(|p| p.status);
+    let asr_device = asr_placement.map(|p| p.status);
     models::verify_bundled(bundled_dir)?;
     let diarizer = if settings.diarize {
         Some(Diarizer::new(bundled_dir)?)
@@ -180,6 +275,7 @@ fn start_pipeline(
             let (feed, translations, thread) = partial::start(
                 asr,
                 &settings.translate,
+                translate_device.as_ref().is_some_and(|d| d.gpu),
                 target_language.clone(),
                 Arc::clone(sink),
             );
@@ -224,6 +320,8 @@ fn start_pipeline(
         audio_tx,
         threads,
         writer,
+        translate_device,
+        asr_device,
     })
 }
 
@@ -256,6 +354,8 @@ pub fn start(
         audio_tx,
         threads,
         writer,
+        translate_device,
+        asr_device,
     } = start_pipeline(
         settings,
         title,
@@ -298,6 +398,8 @@ pub fn start(
     let running = Running {
         meta,
         target_language,
+        translate_device,
+        asr_device,
         captures,
         audio_tx: Some(audio_tx),
         threads,
@@ -535,9 +637,19 @@ fn asr_loop(
         warning.dropped(u.source, sink.as_ref());
     };
     let mut next_id = 1u64;
+    // After a GPU failure the model is not used again; the session stops.
+    let mut gpu_failed = false;
     for seg in rx.iter() {
+        if gpu_failed {
+            continue;
+        }
         let transcript = match asr.transcribe(&seg) {
             Ok(t) => t,
+            Err(e) if e.is::<GpuFailure>() => {
+                gpu_failed = true;
+                sink.fault(&e.to_string());
+                continue;
+            }
             Err(e) => {
                 sink.error("asr", Some(seg.source), &e.to_string());
                 partial::clear(sink.as_ref(), &seg);
@@ -589,6 +701,8 @@ fn translate_loop(
     sink: Arc<dyn Sink>,
     mut partials: Option<partial::Translations>,
 ) {
+    // After a GPU failure the model is not used again; the session stops.
+    let mut gpu_failed = false;
     while let Some(mut u) = partial::next_final(
         &rx,
         translator.as_mut(),
@@ -596,9 +710,17 @@ fn translate_loop(
         partials.as_mut(),
         sink.as_ref(),
     ) {
+        if partials.as_ref().is_some_and(|p| p.gpu_failed) {
+            gpu_failed = true;
+            partials = None;
+        }
         let target_now = target.read().expect("target lock").clone();
         u.translation = if !needs_translation(u.language.as_deref(), &target_now) {
             TranslationState::SameLanguage
+        } else if gpu_failed {
+            TranslationState::Failed {
+                message: "GPU 오류로 번역하지 않았습니다.".into(),
+            }
         } else {
             let result = translator.translate(&u.original, u.language.as_deref(), &target_now);
             if let Some(notice) = translator.take_notice() {
@@ -611,6 +733,14 @@ fn translate_loop(
                     target: target_now,
                     text,
                 },
+                Err(e) if e.is::<GpuFailure>() => {
+                    gpu_failed = true;
+                    partials = None;
+                    sink.fault(&e.to_string());
+                    TranslationState::Failed {
+                        message: e.to_string(),
+                    }
+                }
                 Err(e) => {
                     sink.error("translate", Some(u.source), &e.to_string());
                     TranslationState::Failed {
@@ -627,6 +757,7 @@ fn translate_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::GpuSetting;
     use std::path::PathBuf;
 
     #[test]
@@ -732,6 +863,231 @@ mod tests {
                 .unwrap()
                 .push(format!("{stage}: {message}"));
         }
+        fn fault(&self, message: &str) {
+            self.errors
+                .lock()
+                .unwrap()
+                .push(format!("fault: {message}"));
+        }
+    }
+
+    /// Fails with a GPU failure at the second call.
+    struct BrokenGpu {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl translate::Translator for BrokenGpu {
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            unreachable!("no partials in this test")
+        }
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(format!("번역 {text}"))
+            } else {
+                Err(GpuFailure("GPU 메모리 부족".into()).into())
+            }
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    #[test]
+    fn a_gpu_failure_stops_translation_once_and_keeps_the_originals() {
+        let (tx, rx) = backlog(60_000, utterance_ms);
+        let calls = Arc::new(AtomicU64::new(0));
+        let recorder = Arc::new(Recorder::default());
+        for id in 1..=4 {
+            let u = Utterance {
+                id,
+                source: SourceKind::System,
+                speaker: "S2".into(),
+                start_ms: id * 1000,
+                end_ms: id * 1000 + 500,
+                language: Some("en".into()),
+                original: format!("hello {id}"),
+                translation: TranslationState::Pending,
+            };
+            tx.push(u, &mut |_| {});
+        }
+        drop(tx);
+        translate_loop(
+            rx,
+            Box::new(BrokenGpu {
+                calls: calls.clone(),
+            }),
+            Arc::new(Mutex::new(None)),
+            Arc::new(RwLock::new("ko".into())),
+            recorder.clone(),
+            None,
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(*recorder.errors.lock().unwrap(), ["fault: GPU 메모리 부족"]);
+        let events = recorder.utterances.lock().unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(matches!(
+            events[0].translation,
+            TranslationState::Done { .. }
+        ));
+        for u in &events[1..] {
+            assert!(
+                matches!(u.translation, TranslationState::Failed { .. }),
+                "{u:?}"
+            );
+        }
+        assert_eq!(events[3].original, "hello 4");
+    }
+
+    /// Fails with a GPU failure at the second call.
+    struct BrokenGpuAsr {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl speech::Asr for BrokenGpuAsr {
+        fn transcribe(&mut self, _: &SpeechSegment) -> anyhow::Result<crate::types::Transcript> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(crate::types::Transcript {
+                    text: "안녕하세요".into(),
+                    language: Some("ko".into()),
+                })
+            } else {
+                Err(GpuFailure("음성 인식 모델이 GPU에서 오류를 냈습니다.".into()).into())
+            }
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    #[test]
+    fn a_gpu_failure_stops_speech_recognition_once() {
+        let (tx, rx) = backlog(60_000, segment_ms);
+        for i in 0..4 {
+            tx.push(seg(i), &mut |_| {});
+        }
+        drop(tx);
+        let (tr_tx, tr_rx) = backlog(60_000, utterance_ms);
+        let calls = Arc::new(AtomicU64::new(0));
+        let recorder = Arc::new(Recorder::default());
+        asr_loop(
+            rx,
+            Box::new(BrokenGpuAsr {
+                calls: calls.clone(),
+            }),
+            None,
+            tr_tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(RwLock::new("ko".into())),
+            recorder.clone(),
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            *recorder.errors.lock().unwrap(),
+            ["fault: 음성 인식 모델이 GPU에서 오류를 냈습니다."]
+        );
+        assert_eq!(recorder.utterances.lock().unwrap().len(), 1);
+        assert_eq!(tr_rx.rx.try_iter().count(), 0);
+    }
+
+    fn local_settings(asr: &str) -> Settings {
+        Settings {
+            asr: AsrConfig::Local {
+                model_id: asr.into(),
+            },
+            translate: TranslateConfig::Local {
+                model_id: "gemma-4-e2b-it-q4".into(),
+            },
+            ..Settings::default()
+        }
+    }
+
+    /// The VRAM sum rule: Whisper is placed with the memory that the
+    /// translation model takes on the GPU, and only when that model is on it.
+    #[test]
+    fn whisper_is_placed_beside_the_translation_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = |id: &str| {
+            models::catalog()
+                .into_iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .size_bytes
+        };
+        let gemma = gpu::needed_memory(catalog("gemma-4-e2b-it-q4"));
+        let turbo = catalog("whisper-turbo");
+        for translate_on_gpu in [true, false] {
+            let calls = Mutex::new(Vec::new());
+            let p = place_with(
+                &local_settings("whisper-turbo"),
+                dir.path(),
+                &|need, beside| {
+                    calls.lock().unwrap().push((need, beside));
+                    Ok(if translate_on_gpu || need != gemma {
+                        Placement {
+                            gpu: Some((0, "GPU".into())),
+                            status: ModelDevice {
+                                gpu: true,
+                                detail: "GPU · CUDA".into(),
+                            },
+                        }
+                    } else {
+                        Placement::cpu("GPU 메모리가 모자랍니다")
+                    })
+                },
+            )
+            .unwrap();
+            let whisper = (
+                gpu::whisper_memory(turbo, translate_on_gpu),
+                if translate_on_gpu { gemma } else { 0 },
+            );
+            assert_eq!(*calls.lock().unwrap(), [(gemma, 0), whisper]);
+            assert_eq!(p.translate.unwrap().status.gpu, translate_on_gpu);
+            assert!(p.asr.unwrap().status.gpu);
+        }
+    }
+
+    #[test]
+    fn device_rows_of_the_local_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let off = Settings {
+            gpu: GpuSetting::Off,
+            ..local_settings("whisper-small")
+        };
+        let p = model_devices(&off, dir.path());
+        for device in [p.translate.unwrap().status, p.asr.unwrap().status] {
+            assert!(!device.gpu);
+            assert_eq!(device.detail, "GPU 가속을 껐습니다.");
+        }
+        let sherpa = model_devices(&local_settings(models::SENSE_VOICE_ID), dir.path());
+        assert_eq!(
+            sherpa.asr.unwrap().status.detail,
+            "이 모델은 CPU에서만 돌립니다."
+        );
+        let missing = Settings {
+            gpu: GpuSetting::Device {
+                name: "No Such GPU 9000".into(),
+            },
+            ..local_settings("whisper-small")
+        };
+        let p = model_devices(&missing, dir.path());
+        assert!(p.asr.unwrap().status.detail.contains("No Such GPU 9000"));
+        assert!(place_models(&missing, dir.path()).is_err());
+        let service = Settings {
+            asr: AsrConfig::Custom {
+                endpoint: crate::types::Endpoint {
+                    base_url: "https://api.openai.com/v1".into(),
+                    model: "whisper-1".into(),
+                },
+            },
+            ..off
+        };
+        assert!(model_devices(&service, dir.path()).asr.is_none());
     }
 
     // Tests with real models. Run: MORAGO_TEST_MODELS=<models folder; missing
@@ -752,18 +1108,14 @@ mod tests {
         }
     }
 
-    /// SenseVoice Small and Gemma 4 E2B, installed.
+    /// `MORAGO_TEST_ASR` (default SenseVoice Small) and Gemma 4 E2B,
+    /// installed. The devices follow the 자동 setting (the GPU pack from
+    /// `gpu::app_dir`).
     fn e2e_settings(models_dir: &Path) -> Settings {
-        use crate::settings::{AsrConfig, TranslateConfig};
-        let settings = Settings {
-            asr: AsrConfig::Local {
-                model_id: models::SENSE_VOICE_ID.into(),
-            },
-            translate: TranslateConfig::Local {
-                model_id: "gemma-4-e2b-it-q4".into(),
-            },
-            ..Settings::default()
-        };
+        gpu::init(&gpu::app_dir().unwrap());
+        let asr =
+            std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| models::SENSE_VOICE_ID.into());
+        let settings = local_settings(&asr);
         for id in required_models(&settings) {
             ensure_model(models_dir, &id);
         }
@@ -829,6 +1181,8 @@ mod tests {
         let running = Running {
             meta: p.meta.clone(),
             target_language: p.target_language,
+            translate_device: p.translate_device,
+            asr_device: p.asr_device,
             captures: Vec::new(),
             audio_tx: Some(p.audio_tx),
             threads: p.threads,
@@ -861,6 +1215,15 @@ mod tests {
         let store = SessionStore::new(root.path());
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn Sink> = recorder.clone();
+        let free = || -> Vec<usize> {
+            llama_cpp_2::list_llama_ggml_backend_devices()
+                .into_iter()
+                .filter(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
+                .map(|d| d.memory_free >> 20)
+                .collect()
+        };
+        let before = free();
+        let started = Instant::now();
         let p = start_pipeline(
             &settings,
             Some("e2e".into()),
@@ -871,6 +1234,13 @@ mod tests {
             partial::enabled(&settings.asr),
         )
         .unwrap();
+        println!(
+            "load {:.1?}; ASR {:?}; translation {:?}; free GPU memory {before:?} -> {:?} MiB",
+            started.elapsed(),
+            p.asr_device,
+            p.translate_device,
+            free()
+        );
         feed_in_real_time(&p, &e2e_chunks());
         let (summary, meta, utterances) = finish(p, root.path(), &store);
         for u in &utterances {
@@ -1079,7 +1449,8 @@ mod tests {
             let config = crate::settings::AsrConfig::Local {
                 model_id: id.into(),
             };
-            let mut asr = speech::build_asr(&config, None, &models_dir).unwrap();
+            let mut asr =
+                speech::build_asr(&config, None, &models_dir, &Placement::cpu("")).unwrap();
             for secs in [1u64, 2, 4, 6, 10, 15] {
                 let seg = SpeechSegment {
                     source: SourceKind::System,

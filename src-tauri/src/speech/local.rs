@@ -1,6 +1,7 @@
 //! Local ASR: sherpa-onnx offline recognizers (int8): SenseVoice Small,
-//! Qwen3-ASR, Fun-ASR-MLT-Nano and Whisper. Each detects the language per
-//! segment, or uses the meeting language of the settings.
+//! Qwen3-ASR and Fun-ASR-MLT-Nano. Each detects the language per segment, or
+//! uses the meeting language of the settings. Whisper runs on whisper.cpp
+//! (`whisper.rs`).
 //!
 //! The safe `sherpa-onnx` crate drops the detected language from the result,
 //! so this file calls the C API through `sherpa-onnx-sys` and reads `lang`
@@ -106,14 +107,7 @@ fn config(model_id: &str, dir: &Path, language: Option<&str>) -> anyhow::Result<
             m.funasr_nano.itn = 1;
             m.funasr_nano.language = keep(text(fun_asr_language(code))?);
         }
-        _ => {
-            m.whisper.encoder = keep(file(models::ENCODER_FILE)?);
-            m.whisper.decoder = keep(file(models::DECODER_FILE)?);
-            m.whisper.language = keep(text(code)?);
-            m.whisper.task = keep(text("transcribe")?);
-            m.whisper.tail_paddings = -1;
-            m.tokens = keep(file(models::TOKENS_FILE)?);
-        }
+        _ => bail!("알 수 없는 음성 인식 모델입니다: {model_id}"),
     }
     m.num_threads = threads;
     m.provider = keep(text("cpu")?);
@@ -122,6 +116,26 @@ fn config(model_id: &str, dir: &Path, language: Option<&str>) -> anyhow::Result<
         _strings: strings,
         stream_language,
     })
+}
+
+/// The catalog entry of an installed local ASR model.
+pub(super) fn installed_model(
+    models_dir: &Path,
+    model_id: &str,
+) -> anyhow::Result<models::ModelInfo> {
+    let Some(info) = models::catalog()
+        .into_iter()
+        .find(|m| m.id == model_id && m.kind == models::ModelKind::Asr)
+    else {
+        bail!("알 수 없는 음성 인식 모델입니다: {model_id}");
+    };
+    if !models::is_installed(models_dir, model_id) {
+        bail!(
+            "{} 모델이 설치되어 있지 않습니다. 설정에서 모델을 내려받으세요.",
+            info.name
+        );
+    }
+    Ok(info)
 }
 
 /// Fun-ASR puts the language name into its Chinese prompt ("语音转写成韩文"):
@@ -138,18 +152,7 @@ fn fun_asr_language(code: &str) -> &'static str {
 
 impl LocalAsr {
     pub fn new(models_dir: &Path, model_id: &str, language: Option<&str>) -> anyhow::Result<Self> {
-        let Some(info) = models::catalog()
-            .into_iter()
-            .find(|m| m.id == model_id && m.kind == models::ModelKind::Asr)
-        else {
-            bail!("알 수 없는 음성 인식 모델입니다: {model_id}");
-        };
-        if !models::is_installed(models_dir, model_id) {
-            bail!(
-                "{} 모델이 설치되어 있지 않습니다. 설정에서 모델을 내려받으세요.",
-                info.name
-            );
-        }
+        let info = installed_model(models_dir, model_id)?;
         let config = config(model_id, &models::path(models_dir, model_id), language)?;
         // SAFETY: the pointers in `config.raw` point into `config`, which lives
         // until the create call returns; the call copies what it needs.
@@ -220,24 +223,25 @@ impl Asr for LocalAsr {
     }
 }
 
-/// Parses the result JSON; `lang` is "en" or "<|en|>" (Whisper, SenseVoice).
-/// Qwen3-ASR and Fun-ASR leave `lang` empty: then the script of the text decides.
+/// Parses the result JSON; `lang` is "<|en|>" (SenseVoice). Qwen3-ASR and
+/// Fun-ASR leave `lang` empty: then the script of the text decides.
 fn parse_result(json: &str) -> anyhow::Result<Transcript> {
     let raw: RawResult =
         serde_json::from_str(json).context("음성 인식 결과를 해석하지 못했습니다")?;
-    let text = raw.text.trim().to_string();
-    let language = match raw
-        .lang
-        .trim()
-        .trim_start_matches("<|")
-        .trim_end_matches("|>")
-    {
+    Ok(transcript(&raw.text, &raw.lang))
+}
+
+/// Text and language of a recognizer result. `lang` is "en", "<|en|>" or
+/// empty: then the script of the text decides.
+pub(super) fn transcript(text: &str, lang: &str) -> Transcript {
+    let text = text.trim().to_string();
+    let language = match lang.trim().trim_start_matches("<|").trim_end_matches("|>") {
         "" => language_from_script(&text),
-        // Cantonese (SenseVoice) has no ISO 639-1 code of its own.
+        // Cantonese (SenseVoice, Whisper large-v3) has no ISO 639-1 code of its own.
         "yue" => Some("zh".to_string()),
         lang => language_code(lang),
     };
-    Ok(Transcript { text, language })
+    Transcript { text, language }
 }
 
 /// ko for Hangul, ja for kana; `None` for other scripts, and the translator
@@ -288,9 +292,6 @@ mod tests {
             assert_eq!(c(sv.raw.model_config.sense_voice.language), code);
             assert!(c(sv.raw.model_config.sense_voice.model).ends_with("model.int8.onnx"));
             assert!(sv.stream_language.is_none());
-            let w = config("whisper-small", dir, language).unwrap();
-            assert_eq!(c(w.raw.model_config.whisper.language), code);
-            assert!(w.stream_language.is_none());
             let q = config(models::QWEN3_ASR_ID, dir, language).unwrap();
             assert!(!q.raw.model_config.qwen3_asr.encoder.is_null());
             assert_eq!(

@@ -1,11 +1,14 @@
 // In-memory stand-in for the Tauri core. Used only in a plain browser (no Tauri), to develop the UI
-// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail
+// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail,nogpu,gpufail
 //   many     600 utterances at once on start (scroll and render check)
 //   nomodel  the selected local ASR model is not installed
 //   nosystem system audio is not supported
 //   fail     start_session rejects
+//   nogpu    no NVIDIA GPU
+//   gpufail  start_session rejects when translation would run on the GPU
 
 import type {
+  GpuStatus,
   MockBackend,
   ModelInfo,
   SessionMeta,
@@ -15,6 +18,7 @@ import type {
   Utterance,
 } from "./api";
 
+const MB = 1024 ** 2;
 const flags = new Set((new URLSearchParams(location.search).get("mock") ?? "").split(","));
 const listeners = new Map<string, Set<(p: unknown) => void>>();
 const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((cb) => cb(payload));
@@ -36,19 +40,61 @@ let settings: Settings = {
   capture_system: true,
   mic_device: null,
   sessions_dir: null,
+  gpu: { kind: "auto" },
 };
 
-const MB = 1024 ** 2;
+// GPU: one NVIDIA GPU; ?mock=nogpu has none, ?mock=gpufail fails the start on the GPU.
+const GPU_NAME = "NVIDIA GeForce RTX 5060 Laptop GPU";
+const pack = { id: "cuda-12.9.1", size_bytes: 528 * MB, installed: false, restart: false };
+function gpuStatus(): GpuStatus {
+  const gpus = flags.has("nogpu") ? [] : [GPU_NAME];
+  const local = settings.translate.kind === "local";
+  const chosen = settings.gpu.kind === "device" ? settings.gpu.name : GPU_NAME;
+  const onGpu = gpus.includes(chosen) && settings.gpu.kind !== "off" && pack.installed && !pack.restart;
+  const detail =
+    settings.gpu.kind === "off"
+      ? "GPU 가속을 껐습니다."
+      : gpus.length === 0
+        ? "NVIDIA GPU가 없습니다."
+        : !pack.installed
+          ? `GPU 구성 요소를 내려받으면 ${chosen}를 씁니다.`
+          : pack.restart
+            ? `앱을 다시 시작하면 ${chosen}를 씁니다.`
+            : `${chosen} · CUDA`;
+  const asr = settings.asr;
+  return {
+    gpus,
+    hint: "GPU 가속은 NVIDIA GPU(CUDA)만 씁니다.",
+    pack:
+      gpus.length === 0
+        ? null
+        : {
+            id: pack.id,
+            size_bytes: pack.size_bytes,
+            installed: pack.installed,
+            needs_restart: pack.restart,
+            note: "NVIDIA GPU에서 음성 인식과 번역을 돌리는 CUDA 런타임입니다. NVIDIA 서버에서 내려받고, 풀면 0.7 GB입니다. NVIDIA 드라이버 528.33 이상(RTX 50 시리즈는 570.65 이상)이 필요합니다.",
+          },
+    translate: local ? { gpu: onGpu, detail } : null,
+    asr:
+      asr.kind !== "local"
+        ? null
+        : asr.model_id.startsWith("whisper-")
+          ? { gpu: onGpu, detail }
+          : { gpu: false, detail: "이 모델은 CPU에서만 돌립니다." },
+  };
+}
+
 const models: ModelInfo[] = [
-  { id: "sense-voice-small", kind: "asr", name: "SenseVoice Small", size_bytes: 229 * MB, note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7", installed: !flags.has("nomodel") },
-  { id: "qwen3-asr-0.6b", kind: "asr", name: "Qwen3-ASR 0.6B", size_bytes: 941 * MB, note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1", installed: false },
-  { id: "fun-asr-mlt-nano", kind: "asr", name: "Fun-ASR-MLT-Nano", size_bytes: 963 * MB, note: "31개 언어, 일본어 정확도 높음, 느림, 메모리 약 1.7GB. 오류율 % 한 6.4 · 일 2.9 · 중 2.9 · 영 4.3", installed: false },
-  { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 153 * MB, note: "빠름, 정확도 낮음", installed: true },
-  { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 358 * MB, note: "SenseVoice보다 느림, 메모리 약 2GB. 오류율 % 한 6.4 · 일 14.4 · 중 12.1 · 영 10.3", installed: false },
-  { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 902 * MB, note: "느림, 정확도 높음", installed: false },
-  { id: "whisper-turbo", kind: "asr", name: "Whisper turbo", size_bytes: 989 * MB, note: "정확도 높음, CPU에서는 실시간보다 느릴 수 있음, 메모리 3GB 이상. 오류율 % 한 6.8", installed: false },
-  { id: "gemma-4-e2b-it-q4", kind: "translation", name: "Gemma 4 E2B", size_bytes: 3.1 * 1024 * MB, note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)", installed: true },
-  { id: "gemma-4-12b-it-q4", kind: "translation", name: "Gemma 4 12B", size_bytes: 6.5 * 1024 * MB, note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)", installed: false },
+  { id: "sense-voice-small", kind: "asr", name: "SenseVoice Small", size_bytes: 229 * MB, note: "가볍고 빠름, 메모리 약 1GB (기본). 오류율 % 한 6.9 · 일 7.2 · 중 4.5 · 영 8.7", installed: !flags.has("nomodel"), on_disk: !flags.has("nomodel") },
+  { id: "qwen3-asr-0.6b", kind: "asr", name: "Qwen3-ASR 0.6B", size_bytes: 941 * MB, note: "정확도 높음(한국어·중국어), 느림, 메모리 약 2.5GB. 오류율 % 한 5.1 · 일 12.5 · 중 2.7 · 영 8.1", installed: false, on_disk: false },
+  { id: "fun-asr-mlt-nano", kind: "asr", name: "Fun-ASR-MLT-Nano", size_bytes: 963 * MB, note: "31개 언어, 일본어 정확도 높음, 느림, 메모리 약 1.7GB. 오류율 % 한 6.4 · 일 2.9 · 중 2.9 · 영 4.3", installed: false, on_disk: false },
+  { id: "whisper-base", kind: "asr", name: "Whisper base", size_bytes: 78 * MB, note: "빠름, 정확도 낮음", installed: true, on_disk: true },
+  { id: "whisper-small", kind: "asr", name: "Whisper small", size_bytes: 252 * MB, note: "SenseVoice보다 느림, 메모리 약 0.6GB. 오류율 % 한 7.5 · 일 12.7 · 중 10.6 · 영 11.2", installed: false, on_disk: true },
+  { id: "whisper-medium", kind: "asr", name: "Whisper medium", size_bytes: 514 * MB, note: "느림, 정확도 높음", installed: false, on_disk: false },
+  { id: "whisper-turbo", kind: "asr", name: "Whisper turbo", size_bytes: 547 * MB, note: "정확도 높음, CPU에서는 실시간보다 느림, 메모리 약 1GB. 오류율 % 한 7.4 · 일 4.8 · 중 5.3 · 영 9.3", installed: false, on_disk: false },
+  { id: "gemma-4-e2b-it-q4", kind: "translation", name: "Gemma 4 E2B", size_bytes: 3.1 * 1024 * MB, note: "빠름, 일반 노트북용, 메모리 약 2GB (기본)", installed: true, on_disk: true },
+  { id: "gemma-4-12b-it-q4", kind: "translation", name: "Gemma 4 12B", size_bytes: 6.5 * 1024 * MB, note: "번역 품질 높음, 느림, 메모리 약 8GB (RAM 16GB 이상 권장)", installed: false, on_disk: false },
 ];
 
 const keys = new Map<string, string>();
@@ -234,7 +280,7 @@ function startRun(): SessionMeta {
 // ---- downloads ----
 const downloading = new Map<string, number>();
 function download(id: string) {
-  const m = models.find((x) => x.id === id);
+  const m = id === pack.id ? pack : models.find((x) => x.id === id);
   if (!m || downloading.has(id)) return;
   let done = 0;
   const t = window.setInterval(() => {
@@ -244,6 +290,8 @@ function download(id: string) {
       clearInterval(t);
       downloading.delete(id);
       m.installed = true;
+      if ("on_disk" in m) m.on_disk = true;
+      else pack.restart = true;
       emit("model-download-done", { modelId: id, error: null });
     }
   }, 350);
@@ -294,6 +342,12 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
     case "download_model":
       download(String(a.id));
       return delay(undefined);
+    case "delete_model": {
+      if (run) return Promise.reject("회의 중에는 모델을 지울 수 없습니다. 회의를 마친 뒤 지우십시오.");
+      const m = models.find((x) => x.id === a.id);
+      if (m) m.installed = m.on_disk = false;
+      return delay(undefined);
+    }
     case "cancel_download": {
       const t = downloading.get(String(a.id));
       if (t) {
@@ -305,6 +359,10 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
     }
     case "start_session":
       if (flags.has("fail")) return Promise.reject("마이크를 열 수 없습니다. 운영체제의 마이크 권한을 확인하세요.");
+      if (flags.has("gpufail") && gpuStatus().translate?.gpu)
+        return Promise.reject(
+          `번역 모델을 ${GPU_NAME}에 불러오지 못했습니다. 원인: GPU 메모리 부족. 설정 › GPU 가속에서 다른 GPU나 「끔」을 고른 뒤 다시 시작하세요.`,
+        );
       return delay(startRun());
     case "stop_session": {
       if (!run) return Promise.reject("진행 중인 회의가 없습니다.");
@@ -335,6 +393,11 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
       return delay(undefined);
     case "export_session":
       return delay(undefined, 200);
+    case "gpu_status":
+      return delay(gpuStatus());
+    case "restart_app":
+      pack.restart = false;
+      return delay(undefined);
     default:
       return Promise.reject(`알 수 없는 명령: ${cmd}`);
   }

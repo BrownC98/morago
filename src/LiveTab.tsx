@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { EngineStage } from "./api";
+import type { EngineStage, ModelDevice } from "./api";
 import { clock, languageName, number, providerLabel, TARGET_LANGUAGES } from "./format";
 import { useApp, useLevels } from "./store";
 import { Icon, Select, Switch } from "./ui";
@@ -43,6 +43,7 @@ const STAGE_NAME: Record<EngineStage, string> = {
   store: "저장",
   model: "모델",
   notice: "알림",
+  session: "회의",
 };
 
 export function LiveTab({ active }: { active: boolean }) {
@@ -102,6 +103,9 @@ export function LiveTab({ active }: { active: boolean }) {
 
   const asrLabel = running && meta ? meta.asr_label : providerLabel(settings.asr, models);
   const trLabel = running && meta ? meta.translator_label : providerLabel(settings.translate, models);
+  const device = (d: ModelDevice | null | undefined) => (d ? (d.gpu ? " · GPU" : " · CPU") : "");
+  const asrDevice = device(app.gpu?.asr);
+  const trDevice = device(app.gpu?.translate);
   const otherErrors = (["capture", "store", "model"] as const).filter((s) => engineErrors[s]);
   const idle = !running && utterances.length === 0;
 
@@ -179,6 +183,11 @@ export function LiveTab({ active }: { active: boolean }) {
             role="log"
             tabIndex={0}
           >
+            {!running && app.sessionNotice && (
+              <div className="notice" role="alert">
+                <span>{app.sessionNotice}</span>
+              </div>
+            )}
             {!running &&
               missing.map((m) => (
                 <div className="notice" key={m.section}>
@@ -224,11 +233,13 @@ export function LiveTab({ active }: { active: boolean }) {
         <span className="bi">
           <span className={engineErrors.asr ? "dot bad" : "dot"} aria-hidden="true" />
           음성 인식: {asrLabel}
+          {asrDevice}
           {engineErrors.asr && <span className="berr" title={engineErrors.asr}> · {engineErrors.asr}</span>}
         </span>
         <span className="bi">
           <span className={engineErrors.translate ? "dot bad" : "dot"} aria-hidden="true" />
           번역: {trLabel}
+          {trDevice}
           {engineErrors.translate && <span className="berr" title={engineErrors.translate}> · {engineErrors.translate}</span>}
         </span>
         {otherErrors.map((s) => (

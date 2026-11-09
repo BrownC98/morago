@@ -38,17 +38,28 @@ zeroize = "1.9.1"
 tempfile = "3.27.0"
 sherpa-onnx = "2.0.1"
 sherpa-onnx-sys = "=2.0.1"
-# No default features: no OpenMP runtime (vcomp) to ship on Windows, no CUDA.
+# No default features: no OpenMP runtime (vcomp) to ship on Windows.
 llama-cpp-2 = { version = "0.1.161", default-features = false }
+# Same version as llama-cpp-2 uses: gpu.rs reads llama.cpp log lines for error causes.
+llama-cpp-sys-2 = "0.1.161"
+# Local Whisper. whisper.cpp builds on the ggml of llama-cpp-2: vendor/whisper-rs-sys.
+whisper-rs = { version = "=0.16.0", default-features = false }
 sha2 = "0.11"
+# Unpacks the NVIDIA CUDA archives of the "GPU 구성 요소" pack (gpu.rs).
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# The GPU pack folder before Tauri starts (gpu.rs); Tauri uses the same crate.
+dirs = "7"
 
 # OS credential stores for API keys (secrets.rs). Linux is for development only.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
+# CUDA on NVIDIA GPUs. The CUDA DLLs are not in the installer: build.rs
+# delay-loads them and gpu.rs downloads them on demand.
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["cuda"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
-# Metal GPU offload on macOS only; Windows builds stay CPU (no CUDA in CI).
+# Metal GPU offload on macOS.
 llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["metal"] }
 # System audio on macOS (src/audio/macos_tap.rs). Same versions and features as cpal's.
 objc2 = "0.6"
@@ -62,6 +73,9 @@ linux-keyutils-keyring-store = "1.0.0"
 
 [dev-dependencies]
 hound = "3"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

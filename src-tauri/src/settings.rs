@@ -2,7 +2,7 @@
 //! Owner: secrets/storage worker (high risk). Holds no API key: keys are in `secrets`.
 //! Contract (do not change the types without the coordinator).
 
-use crate::types::Endpoint;
+use crate::types::{Endpoint, GpuSetting};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -144,6 +144,7 @@ pub struct Settings {
     pub mic_device: Option<String>,
     /// `None` = `<documents>/morago/sessions`.
     pub sessions_dir: Option<PathBuf>,
+    pub gpu: GpuSetting,
 }
 
 impl Default for Settings {
@@ -164,6 +165,7 @@ impl Default for Settings {
             capture_system: true,
             mic_device: None,
             sessions_dir: None,
+            gpu: GpuSetting::Auto,
         }
     }
 }
@@ -275,6 +277,9 @@ mod tests {
             capture_system: false,
             mic_device: Some("USB 마이크".into()),
             sessions_dir: Some(PathBuf::from("/tmp/세션")),
+            gpu: GpuSetting::Device {
+                name: "NVIDIA GeForce RTX 5060 Laptop GPU".into(),
+            },
         }
     }
 
@@ -470,6 +475,8 @@ mod tests {
         assert!(!text.contains("LEAK1234"), "{text}");
     }
 
+    /// The ids of the sherpa-onnx Whisper models (before 2026-11-09) are now
+    /// the whisper.cpp models of the same size.
     #[test]
     fn a_file_with_a_whisper_model_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -566,6 +573,22 @@ mod tests {
         assert_eq!(s.theme, Theme::Light);
         assert_eq!(s.target_language, "ko");
         assert_eq!(s.asr, Settings::default().asr);
+        assert_eq!(s.gpu, GpuSetting::Auto);
+    }
+
+    #[test]
+    fn gpu_setting_json() {
+        for (gpu, json) in [
+            (GpuSetting::Auto, r#"{"kind":"auto"}"#),
+            (GpuSetting::Off, r#"{"kind":"off"}"#),
+            (
+                GpuSetting::Device { name: "RTX".into() },
+                r#"{"kind":"device","name":"RTX"}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&gpu).unwrap(), json);
+            assert_eq!(serde_json::from_str::<GpuSetting>(json).unwrap(), gpu);
+        }
     }
 
     #[test]

@@ -8,10 +8,9 @@
 mod custom;
 mod local;
 
-pub use custom::{check_extra_body, check_extra_body_map};
-pub(crate) use local::on_gpu as local_on_gpu;
-
+use crate::gpu::Placement;
 use crate::settings::TranslateConfig;
+pub use custom::{check_extra_body, check_extra_body_map};
 use std::collections::VecDeque;
 use std::path::Path;
 
@@ -43,18 +42,20 @@ pub trait Translator: Send {
     }
 }
 
-/// Builds the translator from settings. Local models are in `models_dir`.
+/// Builds the translator from settings. Local models are in `models_dir` and
+/// load on the device of `placement` (`gpu::place`; a custom endpoint ignores it).
 /// A custom endpoint reads its key with `secrets::get_key(Role::Translate, base_url)`.
 /// `context_lines`: most earlier utterances sent as context.
 pub fn build_translator(
     config: &TranslateConfig,
     context_lines: usize,
     models_dir: &Path,
+    placement: &Placement,
 ) -> anyhow::Result<Box<dyn Translator>> {
     let history = History::new(context_lines);
     match config {
         TranslateConfig::Local { model_id } => Ok(Box::new(local::LocalTranslator::load(
-            models_dir, model_id, history,
+            models_dir, model_id, history, placement,
         )?)),
         TranslateConfig::Custom {
             endpoint,
@@ -262,7 +263,9 @@ mod tests {
                 extra_body: extra.as_object().unwrap().clone(),
                 partial_interval_ms: None,
             };
-            let err = build_translator(&config, 4, Path::new("")).err().unwrap();
+            let err = build_translator(&config, 4, Path::new(""), &Placement::cpu(""))
+                .err()
+                .unwrap();
             assert_eq!(
                 err.to_string(),
                 "번역 모델 이름이 없습니다. 설정 › 번역 › 추가 요청 값에 \"model\"을 적으세요."

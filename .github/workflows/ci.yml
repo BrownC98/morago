@@ -5,13 +5,20 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      job:
+        description: "e2e: end-to-end test with real models. bundle: installers."
+        type: choice
+        required: true
+        options: [e2e, bundle]
 
 # A new push to a work branch cancels its older run. Runs on master, the
 # integration branch 회의번역앱 and gate/* always finish: the merge gate waits
 # for the run of an exact commit (a push cancelled it twice on 2026-11-08).
-# Manual runs (installers, e2e) have their own group, so a push does not cancel them.
+# Manual runs have one group per `job` input, so a push or a manual run of
+# the other job does not cancel them.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.job }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/회의번역앱' && !startsWith(github.ref, 'refs/heads/gate/') }}
 
 env:
@@ -81,7 +88,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Windows 2022: nvcc 12.9 accepts Visual Studio 2017-2022 only, and
+        # windows-latest has Visual Studio 2026 (run 42495337555).
+        os: [windows-2022, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -89,10 +98,20 @@ jobs:
         with:
           components: clippy
       - uses: ./.github/actions/sherpa-libs
+      - uses: ./.github/actions/cuda-toolkit
+        if: runner.os == 'Windows'
+      # The runner has no GPU: PTX for one architecture is enough to compile
+      # and link the CUDA code, in a fraction of the release build time.
+      - name: Short CUDA build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CMAKE_CUDA_ARCHITECTURES=75-virtual" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: check
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           # The unpacked sherpa-onnx libs live outside target/debug.
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
           # Only the integration branch and master save; work branches restore.
@@ -108,14 +127,15 @@ jobs:
         run: cargo test secrets -- --ignored
 
   # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
-  # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*. Manual runs only (about 3.6 GB
+  # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*;
+  # Whisper small (whisper.cpp): speech::whisper. Manual runs only (about 4.2 GB
   # of models, cached).
   e2e:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'e2e' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-2022, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
       LLAMA_LIB_PROFILE: Release
@@ -125,15 +145,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/sherpa-libs
+      - uses: ./.github/actions/cuda-toolkit
+        if: runner.os == 'Windows'
+      - name: Short CUDA build (no GPU on the runner)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CMAKE_CUDA_ARCHITECTURES=75-virtual" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: e2e
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
       - uses: actions/cache@v4
         with:
           path: e2e/models
-          key: e2e-models-v2
+          key: e2e-models-v3
       - name: Test speech clips (sherpa-onnx model test files)
         shell: bash
         run: |
@@ -145,20 +173,23 @@ jobs:
       - name: End-to-end pipeline test
         working-directory: src-tauri
         run: cargo test --lib engine::tests::pipeline_end_to_end -- --ignored --nocapture
+      - name: Whisper (whisper.cpp) on real clips
+        working-directory: src-tauri
+        run: cargo test --lib speech::whisper::tests::whisper_on_real_clips -- --ignored --nocapture
       - name: Local translation with context
         working-directory: src-tauri
         env:
           MORAGO_TEST_MODELS_DIR: ${{ github.workspace }}/e2e/models
         run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture --test-threads=1
 
-  # Installers (NSIS, dmg) only at release: tags v* and manual runs.
+  # Installers (NSIS, dmg) only at release: tags v* and manual runs with job=bundle.
   bundle:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.job == 'bundle') }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             bundles: nsis
           - os: macos-latest
             bundles: dmg
@@ -174,10 +205,14 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/sherpa-libs
+      - uses: ./.github/actions/cuda-toolkit
+        if: runner.os == 'Windows'
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: bundle
+          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
+          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           save-if: false
       - run: pnpm install --frozen-lockfile
       # The Tauri bundler downloads NSIS from GitHub releases without a token;

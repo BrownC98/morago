@@ -15,6 +15,7 @@ import {
   errText,
   onEvent,
   type EngineStage,
+  type GpuStatus,
   type ModelInfo,
   type PartialText,
   type SessionMeta,
@@ -51,6 +52,7 @@ export interface App {
   downloadErrors: Record<string, string>;
   startDownload: (id: string) => void;
   cancelDownload: (id: string) => void;
+  deleteModel: (id: string) => void;
   mics: string[];
   systemAudio: { supported: boolean; reason: string | null } | null;
   running: boolean;
@@ -63,6 +65,10 @@ export interface App {
   /** Live text of speech that has not ended: one per source. */
   partials: Partial<Record<SourceKind, PartialText>>;
   engineErrors: Partial<Record<EngineStage, string>>;
+  /** Why the last session did not start, or why the core stopped it. */
+  sessionNotice: string | null;
+  gpu: GpuStatus | null;
+  refreshGpu: () => void;
   startSession: () => Promise<void>;
   stopSession: () => Promise<void>;
   /** Bumps when the session list changes (stop, delete, rename). */
@@ -138,6 +144,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [levels, setLevels] = useState<Record<SourceKind, number>>({ mic: 0, system: 0 });
   const [partials, setPartials] = useState<App["partials"]>({});
   const [engineErrors, setEngineErrors] = useState<App["engineErrors"]>({});
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [gpu, setGpu] = useState<GpuStatus | null>(null);
   const [sessionsVersion, setSessionsVersion] = useState(0);
   const [openRecordId, setOpenRecordId] = useState<string | null>(null);
   const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
@@ -155,6 +163,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     api.listModels().then(setModels, (e) => notify("error", errText(e)));
   }, [notify]);
 
+  const refreshGpu = useCallback(() => {
+    api.gpuStatus().then(setGpu, () => setGpu(null));
+  }, []);
+
   // Initial load.
   useEffect(() => {
     api.getSettings().then(
@@ -165,9 +177,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       (e) => notify("error", errText(e)),
     );
     refreshModels();
+    refreshGpu();
     api.listMics().then(setMics, () => setMics([]));
     api.systemAudioSupport().then(setSystemAudio, () => setSystemAudio(null));
-  }, [notify, refreshModels]);
+  }, [notify, refreshModels, refreshGpu]);
 
   // Core events.
   useEffect(() => {
@@ -198,12 +211,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setLevels({ mic: 0, system: 0 });
           setPartials({});
         }
+        refreshGpu();
       }),
       onEvent("engine-error", (p) => {
         // A notice (a setting the server ignores, skipped work) must stay readable:
         // a toast, not the status-bar error that the next good result clears.
         if (p.stage === "notice") notify("info", p.message);
-        else setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
+        else if (p.stage === "session") {
+          setSessionNotice(p.message);
+          setSessionsVersion((v) => v + 1);
+        } else setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
       }),
       onEvent("model-download", (p) =>
         setDownloads((d) => ({ ...d, [p.model_id]: { done: p.done_bytes, total: p.total_bytes } })),
@@ -221,12 +238,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return n;
         });
         refreshModels();
+        refreshGpu();
       }),
     ];
     return () => {
       for (const u of unsubs) u.then((f) => f());
     };
-  }, [refreshModels]);
+  }, [refreshModels, refreshGpu, notify]);
 
   // Saves are sent one after another, so the last change wins.
   const updateSettings = useCallback(
@@ -241,6 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.saveSettings(next).then(
           () => {
             setSaveState(settingsRef.current === next ? "saved" : "saving");
+            if ("gpu" in patch || "translate" in patch || "asr" in patch) refreshGpu();
             return true;
           },
           (e) => {
@@ -251,7 +270,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ),
       );
     },
-    [notify],
+    [notify, refreshGpu],
   );
   const settled = useCallback(() => saveChain.current, []);
 
@@ -282,23 +301,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [notify],
   );
 
+  const deleteModel = useCallback(
+    (id: string) => {
+      api.deleteModel(id).then(refreshModels, (e) => notify("error", errText(e)));
+    },
+    [notify, refreshModels],
+  );
+
   const startSession = useCallback(async () => {
     setStarting(true);
     // Clear first: the core can send utterances before the command returns.
     setUtterances([]);
     setPartials({});
     setEngineErrors({});
+    setSessionNotice(null);
     try {
       const m = await api.startSession(null);
       setMeta(m);
       setRunning(true);
       setStartedAt((s) => s ?? m.started_at);
     } catch (e) {
-      notify("error", errText(e));
+      setSessionNotice(`회의를 시작하지 못했습니다. ${errText(e)}`);
     } finally {
       setStarting(false);
     }
-  }, [notify]);
+  }, []);
 
   const bumpSessions = useCallback(() => setSessionsVersion((v) => v + 1), []);
 
@@ -343,6 +370,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       downloadErrors,
       startDownload,
       cancelDownload,
+      deleteModel,
       mics,
       systemAudio,
       running,
@@ -353,6 +381,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       utterances,
       partials,
       engineErrors,
+      sessionNotice,
+      gpu,
+      refreshGpu,
       startSession,
       stopSession,
       sessionsVersion,
@@ -376,6 +407,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       downloadErrors,
       startDownload,
       cancelDownload,
+      deleteModel,
       mics,
       systemAudio,
       running,
@@ -386,6 +418,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       utterances,
       partials,
       engineErrors,
+      sessionNotice,
+      gpu,
+      refreshGpu,
       startSession,
       stopSession,
       sessionsVersion,

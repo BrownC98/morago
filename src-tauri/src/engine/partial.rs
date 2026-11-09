@@ -7,10 +7,11 @@
 //! under the same mutex, only for the speech in progress.
 
 use super::{BacklogRx, Sink};
+use crate::gpu::GpuFailure;
 use crate::models;
 use crate::settings::{AsrConfig, TranslateConfig};
 use crate::speech;
-use crate::translate::{self, Translator, needs_translation};
+use crate::translate::{Translator, needs_translation};
 use crate::types::{AudioChunk, PartialText, SAMPLE_RATE, SourceKind, SpeechSegment, Utterance};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, after, bounded, never, select};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -37,9 +38,10 @@ pub(super) fn enabled(asr: &AsrConfig) -> bool {
 /// A local model translates partials only on a GPU. On the CPU they made the
 /// final translations 0.9 to 2.5 s slower (Windows, 16 threads, Gemma 4 E2B,
 /// 2026-11-09), also of a final with no partial work beside it.
-fn translate_interval(config: &TranslateConfig) -> Option<Duration> {
+/// `local_on_gpu`: the local model's placement is a GPU (`gpu::place`).
+fn translate_interval(config: &TranslateConfig, local_on_gpu: bool) -> Option<Duration> {
     match config {
-        TranslateConfig::Local { .. } => translate::local_on_gpu().then_some(Duration::ZERO),
+        TranslateConfig::Local { .. } => local_on_gpu.then_some(Duration::ZERO),
         TranslateConfig::Custom {
             partial_interval_ms,
             ..
@@ -213,13 +215,14 @@ impl Slot {
 pub(super) fn start(
     asr: Box<dyn speech::Asr>,
     translate: &TranslateConfig,
+    local_on_gpu: bool,
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
 ) -> (Feed, Option<Translations>, JoinHandle<()>) {
     let live = Arc::new(Live::default());
     let (jobs, jobs_rx) = bounded(0);
-    let translations =
-        translate_interval(translate).map(|interval| Translations::new(&live, interval));
+    let translations = translate_interval(translate, local_on_gpu)
+        .map(|interval| Translations::new(&live, interval));
     let slot = translations.as_ref().map(|t| t.slot.clone());
     let thread = {
         let live = live.clone();
@@ -277,6 +280,9 @@ pub(super) struct Translations {
     interval: Duration,
     /// Speech generation and start time of the last request, per source.
     last: [Option<(u64, Instant)>; 2],
+    /// A partial translation got a `GpuFailure`: the engine has the fault,
+    /// no partial runs again and `translate_loop` stops using the model.
+    pub(super) gpu_failed: bool,
 }
 
 enum Next {
@@ -298,10 +304,14 @@ impl Translations {
             live: live.clone(),
             interval,
             last: [None; 2],
+            gpu_failed: false,
         }
     }
 
     fn next(&mut self) -> Next {
+        if self.gpu_failed {
+            return Next::Idle;
+        }
         let mut slot = self.slot.request.lock().expect("slot lock");
         let Some((source, generation)) = slot.as_ref().map(|r| (r.source, r.generation)) else {
             return Next::Idle;
@@ -322,7 +332,7 @@ impl Translations {
 
     /// Stops when a final waits or when the speech of the request ends.
     fn run(
-        &self,
+        &mut self,
         request: Request,
         translator: &mut dyn Translator,
         target: &RwLock<String>,
@@ -348,6 +358,10 @@ impl Translations {
                     started.elapsed().as_millis()
                 );
                 self.live.translation(&request, text, sink);
+            }
+            Err(e) if e.is::<GpuFailure>() => {
+                self.gpu_failed = true;
+                sink.fault(&e.to_string());
             }
             Err(e) => log::debug!("partial translation: {e}"),
         }
@@ -483,19 +497,23 @@ mod tests {
     #[test]
     fn partial_translation_interval_per_translator() {
         assert_eq!(
-            translate_interval(&local_translate()),
-            translate::local_on_gpu().then_some(Duration::ZERO)
+            translate_interval(&local_translate(), true),
+            Some(Duration::ZERO)
         );
+        assert_eq!(translate_interval(&local_translate(), false), None);
         assert_eq!(
-            translate_interval(&custom(Some(1500))),
+            translate_interval(&custom(Some(1500)), false),
             Some(Duration::from_millis(1500))
         );
         // "끔": no partial translation requests.
-        assert_eq!(translate_interval(&custom(None)), None);
+        assert_eq!(translate_interval(&custom(None), false), None);
         // 0: a request for each partial text, still one at a time.
-        assert_eq!(translate_interval(&custom(Some(0))), Some(Duration::ZERO));
         assert_eq!(
-            translate_interval(&custom(Some(u32::MAX))),
+            translate_interval(&custom(Some(0)), false),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            translate_interval(&custom(Some(u32::MAX)), false),
             Some(Duration::from_millis(u32::MAX.into()))
         );
     }
@@ -567,7 +585,7 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         let asr = Box::new(FakeAsr(length));
         let target = Arc::new(RwLock::new("ko".to_string()));
-        let (mut feed, _, thread) = start(asr, &custom(None), target, recorder.clone());
+        let (mut feed, _, thread) = start(asr, &custom(None), false, target, recorder.clone());
         for i in 0..15 {
             offer_taken(&mut feed, i);
         }
@@ -589,7 +607,7 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         let (asr, go, runs) = gated_asr();
         let target = Arc::new(RwLock::new("ko".to_string()));
-        let (mut feed, _, thread) = start(asr, &custom(None), target, recorder.clone());
+        let (mut feed, _, thread) = start(asr, &custom(None), false, target, recorder.clone());
         offer_taken(&mut feed, 0);
         wait_runs(&runs, 1);
         // The worker is busy: the offers due at 0.8 s ... 4.2 s of audio are skipped.
@@ -624,7 +642,7 @@ mod tests {
         let (asr, go, runs) = gated_asr();
         let target = Arc::new(RwLock::new("ko".to_string()));
         let (mut feed, translations, thread) =
-            start(asr, &custom(Some(1500)), target, recorder.clone());
+            start(asr, &custom(Some(1500)), false, target, recorder.clone());
         offer_taken(&mut feed, 0);
         wait_runs(&runs, 1);
         // The segment ends while the worker runs.
@@ -792,6 +810,73 @@ mod tests {
         }
     }
 
+    /// Counts calls; every partial translation fails on the GPU.
+    #[derive(Default)]
+    struct BrokenGpuPartials {
+        partials: Arc<AtomicU64>,
+        finals: Arc<AtomicU64>,
+    }
+
+    impl Translator for BrokenGpuPartials {
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            self.finals.fetch_add(1, Ordering::Relaxed);
+            Ok(format!("번역 {text}"))
+        }
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            self.partials.fetch_add(1, Ordering::Relaxed);
+            Err(GpuFailure("GPU 메모리 부족".into()).into())
+        }
+        fn label(&self) -> String {
+            "broken".into()
+        }
+    }
+
+    #[test]
+    fn a_gpu_failure_in_a_partial_translation_stops_the_session_once() {
+        let recorder = Arc::new(Recorder::default());
+        let t = Translations::new(&Arc::new(Live::default()), Duration::ZERO);
+        let (live, slot) = (t.live.clone(), t.slot.clone());
+        ask(&live, &slot, "one", recorder.as_ref());
+        let translator = BrokenGpuPartials::default();
+        let (partials, finals) = (translator.partials.clone(), translator.finals.clone());
+        let (tx, rx) = backlog(60_000, utterance_ms);
+        let sink = recorder.clone();
+        let thread = std::thread::spawn(move || {
+            translate_loop(
+                rx,
+                Box::new(translator),
+                Arc::new(Mutex::new(None)),
+                Arc::new(RwLock::new("ko".into())),
+                sink,
+                Some(t),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while recorder.errors.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "no fault");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // After the fault: no partial runs and no final goes to the model.
+        ask(&live, &slot, "one two", recorder.as_ref());
+        tx.push(final_utterance(1), &mut |_| {});
+        drop(tx);
+        thread.join().unwrap();
+        assert_eq!(*recorder.errors.lock().unwrap(), ["fault: GPU 메모리 부족"]);
+        assert_eq!(partials.load(Ordering::Relaxed), 1);
+        assert_eq!(finals.load(Ordering::Relaxed), 0);
+        let u = &recorder.utterances.lock().unwrap()[0];
+        assert!(
+            matches!(u.translation, TranslationState::Failed { .. }),
+            "{u:?}"
+        );
+    }
+
     #[test]
     fn a_waiting_final_stops_a_partial_translation_and_goes_first() {
         let recorder = Arc::new(Recorder::default());
@@ -887,7 +972,7 @@ mod tests {
     #[test]
     fn a_custom_translator_gets_one_partial_request_per_interval_per_speech() {
         let recorder = Arc::new(Recorder::default());
-        let interval = translate_interval(&custom(Some(1500))).unwrap();
+        let interval = translate_interval(&custom(Some(1500)), false).unwrap();
         let t = Translations::new(&Arc::new(Live::default()), interval);
         let (live, slot) = (t.live.clone(), t.slot.clone());
         let l = run_loop(t, 0, recorder.clone());
