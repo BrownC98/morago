@@ -29,8 +29,9 @@ pub enum TranslateConfig {
         /// Passes `translate::check_extra_body_map`.
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         extra_body: Map<String, Value>,
-        /// Least time between two partial translation requests of one speech
-        /// (500..=10000 ms). `None` (`null`) = no partial requests ("끔").
+        /// Least time between two partial translation requests of one speech,
+        /// in ms. 0 = a request for each partial text (one at a time).
+        /// `None` (`null`) = no partial requests ("끔").
         partial_interval_ms: Option<u32>,
     },
 }
@@ -38,6 +39,24 @@ pub enum TranslateConfig {
 /// A file without the field (from before it) gets 1.5 s.
 fn default_partial_interval_ms() -> Option<u32> {
     Some(1500)
+}
+
+/// A hand-edited value that is not `null` or an integer in `u32` (negative,
+/// fraction, text) gets the default, not the whole file.
+fn partial_interval_or_default<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<u32>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::Null => None,
+        v => v
+            .as_u64()
+            .and_then(|ms| u32::try_from(ms).ok())
+            .map(Some)
+            .unwrap_or_else(|| {
+                log::warn!("settings file: partial_interval_ms is not a whole number of ms; used the default");
+                default_partial_interval_ms()
+            }),
+    })
 }
 
 /// The stored form, also of files from before `extra_body`.
@@ -54,7 +73,10 @@ enum RawTranslateConfig {
         /// Old field; read only, moved into `extra_body` like `endpoint.model`.
         #[serde(default)]
         reasoning_effort: Option<String>,
-        #[serde(default = "default_partial_interval_ms")]
+        #[serde(
+            default = "default_partial_interval_ms",
+            deserialize_with = "partial_interval_or_default"
+        )]
         partial_interval_ms: Option<u32>,
     },
 }
@@ -267,7 +289,12 @@ mod tests {
     fn partial_interval_round_trip_and_off_is_null() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        for (interval, text) in [(Some(2500), "2500"), (None, "null")] {
+        for (interval, text) in [
+            (Some(2500), "2500"),
+            (Some(0), "0"),
+            (Some(u32::MAX), "4294967295"),
+            (None, "null"),
+        ] {
             let mut s = translate_custom(serde_json::json!({}));
             if let TranslateConfig::Custom {
                 partial_interval_ms,
@@ -311,6 +338,18 @@ mod tests {
             "extra_body": extra_body,
             "partial_interval_ms": 1500,
         })
+    }
+
+    #[test]
+    fn a_bad_partial_interval_in_the_file_gets_the_default() {
+        for value in ["-1", "1.5", "\"1500\"", "4294967296", "{}"] {
+            let (s, saved) = load_and_save(&custom_file(
+                "",
+                &format!(r#","partial_interval_ms":{value}"#),
+            ));
+            assert_eq!(s, translate_custom(serde_json::json!({})), "{value}");
+            assert_eq!(saved["partial_interval_ms"], 1500, "{value}");
+        }
     }
 
     #[test]

@@ -295,31 +295,63 @@ function ExtraBodyField({
   );
 }
 
-/** `partial_interval_ms`: off, then 0.5 s to 10 s in 0.5 s steps. */
-const INTERVALS: { value: string; label: string }[] = [
-  { value: "off", label: "끔" },
-  ...Array.from({ length: 20 }, (_, i) => {
-    const ms = (i + 1) * 500;
-    return { value: String(ms), label: `${ms / 1000}초${ms === 1500 ? "(기본값)" : ""}` };
-  }),
-];
+/** Largest `partial_interval_ms` (Rust `u32`). */
+const MAX_INTERVAL = 4_294_967_295;
 
-/** `partial_interval_ms` of a custom translation server. */
+/** `partial_interval_ms` of a custom translation server: off (`null`) or whole ms from 0. */
 function IntervalField({ interval, onInterval }: { interval?: number | null; onInterval: (ms: number | null) => void }) {
+  const [text, setText] = useState(String(interval ?? 1500));
+  const [error, setError] = useState<string | null>(null);
+  const on = interval !== null;
+
+  useEffect(() => {
+    if (interval != null) setText(String(interval));
+  }, [interval]);
+
+  const commit = () => {
+    const t = text.trim();
+    const ms = Number(t);
+    if (!/^\d+$/.test(t) || ms > MAX_INTERVAL) {
+      setError("0 이상의 정수(ms)로 적습니다. 저장하지 않았습니다.");
+      return;
+    }
+    setError(null);
+    if (ms !== interval) onInterval(ms);
+  };
+
   return (
     <>
       <span className="flab" aria-hidden="true">중간 번역 간격</span>
-      <Select
-        label="중간 번역 간격"
-        width={260}
-        value={interval === null ? "off" : String(interval ?? 1500)}
-        onChange={(v) => onInterval(v === "off" ? null : Number(v))}
-        options={INTERVALS}
-      />
+      <div className="row2">
+        <Switch
+          checked={on}
+          onChange={(v) => {
+            setError(null);
+            onInterval(v ? (/^\d+$/.test(text.trim()) ? Number(text.trim()) : 1500) : null);
+          }}
+        >
+          {on ? "켬" : "끔"}
+        </Switch>
+        <input
+          className="inp"
+          style={{ width: 120 }}
+          aria-label="중간 번역 간격(ms)"
+          aria-invalid={error !== null}
+          aria-describedby="translate-interval-msg"
+          inputMode="numeric"
+          autoComplete="off"
+          disabled={!on}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLElement).blur()}
+        />
+        <span>ms</span>
+      </div>
       <span />
-      <p className="fhint">
-        말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다. 간격이 짧을수록 요청이 많아져 요금이
-        늘어납니다.
+      <p id="translate-interval-msg" className={error ? "fhint errtext" : "fhint"} role="status">
+        {error ??
+          "말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다(기본값 1500). 0이면 글이 바뀔 때마다 요청합니다. 값이 작을수록 요청이 많아져 요금이 늘어납니다."}
       </p>
     </>
   );
