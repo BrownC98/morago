@@ -210,11 +210,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          shared-key: bundle
-          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
           # llama-cpp-sys-2 does not rebuild when the CUDA architectures or the
-          # toolkit change, so their files are in the restore prefix.
-          key: ${{ runner.os == 'Windows' && format('vs2022-{0}', hashFiles('src-tauri/.cargo/config.toml', '.github/actions/cuda-toolkit/action.yml')) || '' }}
+          # toolkit change, so their files are in the restore prefix (rust-cache
+          # ignores `key` when `shared-key` is set).
+          shared-key: ${{ runner.os == 'Windows' && format('bundle-vs2022-{0}', hashFiles('src-tauri/.cargo/config.toml', '.github/actions/cuda-toolkit/action.yml')) || 'bundle' }}
           # The cached CUDA build of llama.cpp saves about an hour. Tag runs
           # cannot save for the next tag (a cache stays in the ref that saved
           # it), so manual runs save: on master for the tags.
