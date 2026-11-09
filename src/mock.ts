@@ -36,6 +36,7 @@ let settings: Settings = {
   },
   translate_context_lines: 4,
   diarize: true,
+  live_partials: true,
   capture_mic: true,
   capture_system: true,
   mic_device: null,
@@ -233,7 +234,7 @@ function startRun(): SessionMeta {
     const start = Date.now() - r.startedAt;
     // Like the engine: the partial text grows every 0.7 s, its translation one step behind,
     // then the finished utterance replaces it.
-    for (let k = 1; k < STEPS; k++) {
+    for (let k = 1; settings.live_partials && k < STEPS; k++) {
       window.setTimeout(() => {
         if (run !== r) return;
         const translated = l.tr !== "same" && l.tr !== "fail" && k > 1;

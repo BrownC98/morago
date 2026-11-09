@@ -199,6 +199,11 @@ pub fn model_devices(settings: &Settings, models_dir: &Path) -> Placements {
     .expect("no error")
 }
 
+/// The `partials` argument of `start_pipeline` for a session.
+fn live_partials(settings: &Settings) -> bool {
+    settings.live_partials && partial::enabled(&settings.asr)
+}
+
 /// Loads the models, creates the session file and starts the stage threads.
 /// `partials`: run a second ASR for live partial text (`partial::enabled`).
 fn start_pipeline(
@@ -363,7 +368,7 @@ pub fn start(
         bundled_dir,
         store,
         &sink,
-        partial::enabled(&settings.asr),
+        live_partials(settings),
     )?;
 
     let t0 = Instant::now();
@@ -993,6 +998,86 @@ mod tests {
         );
         assert_eq!(recorder.utterances.lock().unwrap().len(), 1);
         assert_eq!(tr_rx.rx.try_iter().count(), 0);
+    }
+
+    struct EnglishAsr;
+
+    impl speech::Asr for EnglishAsr {
+        fn transcribe(&mut self, seg: &SpeechSegment) -> anyhow::Result<crate::types::Transcript> {
+            Ok(crate::types::Transcript {
+                text: format!("hello {}", seg.start_ms),
+                language: Some("en".into()),
+            })
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    struct FinalsOnly;
+
+    impl translate::Translator for FinalsOnly {
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            unreachable!("live partials are off")
+        }
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            Ok(format!("번역 {text}"))
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    #[test]
+    fn with_live_partials_off_finals_come_and_no_partial() {
+        let mut settings = local_settings(models::SENSE_VOICE_ID);
+        assert!(live_partials(&settings));
+        settings.live_partials = false;
+        assert!(!live_partials(&settings));
+        // The stages as `start_pipeline` starts them with `partials` false.
+        let (tx, rx) = backlog(60_000, segment_ms);
+        for i in 0..3 {
+            tx.push(seg(i), &mut |_| {});
+        }
+        drop(tx);
+        let (tr_tx, tr_rx) = backlog(60_000, utterance_ms);
+        let recorder = Arc::new(Recorder::default());
+        let target = Arc::new(RwLock::new("ko".to_string()));
+        asr_loop(
+            rx,
+            Box::new(EnglishAsr),
+            None,
+            tr_tx,
+            Arc::new(Mutex::new(None)),
+            target.clone(),
+            recorder.clone(),
+        );
+        translate_loop(
+            tr_rx,
+            Box::new(FinalsOnly),
+            Arc::new(Mutex::new(None)),
+            target,
+            recorder.clone(),
+            None,
+        );
+        assert!(recorder.partials.lock().unwrap().is_empty());
+        let done: Vec<String> = recorder
+            .utterances
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|u| match &u.translation {
+                TranslationState::Done { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(done, ["번역 hello 0", "번역 hello 1000", "번역 hello 2000"]);
     }
 
     fn local_settings(asr: &str) -> Settings {

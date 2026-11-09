@@ -404,8 +404,17 @@ function WholeNumberField({
   );
 }
 
-/** `partial_interval_ms` of a custom translation server: off (`null`) or whole ms from 0. */
-function IntervalField({ interval, onInterval }: { interval?: number | null; onInterval: (ms: number | null) => void }) {
+/** `partial_interval_ms` of a custom translation server: off (`null`) or whole ms from 0.
+ * `live`: the live partials setting; when it is off, the field has no effect. */
+function IntervalField({
+  interval,
+  live,
+  onInterval,
+}: {
+  interval?: number | null;
+  live: boolean;
+  onInterval: (ms: number | null) => void;
+}) {
   const lastOn = useRef(1500);
   if (interval != null) lastOn.current = interval;
   const on = interval !== null;
@@ -416,13 +425,17 @@ function IntervalField({ interval, onInterval }: { interval?: number | null; onI
       unit="ms"
       value={lastOn.current}
       min={0}
-      disabled={!on}
+      disabled={!live || !on}
       before={
-        <Switch checked={on} onChange={(v) => onInterval(v ? lastOn.current : null)}>
+        <Switch checked={on} disabled={!live} onChange={(v) => onInterval(v ? lastOn.current : null)}>
           {on ? "켬" : "끔"}
         </Switch>
       }
-      hint="말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다(기본값 1500). 0이면 글이 바뀔 때마다 요청합니다. 값이 작을수록 요청이 많아져 요금이 늘어납니다."
+      hint={
+        live
+          ? "말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다(기본값 1500). 0이면 글이 바뀔 때마다 요청합니다. 값이 작을수록 요청이 많아져 요금이 늘어납니다."
+          : "음성 인식의 실시간 전사가 꺼져 있어 중간 번역을 요청하지 않습니다."
+      }
       onCommit={onInterval}
     />
   );
@@ -607,6 +620,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
                 />
                 <IntervalField
                   interval={cfg.partial_interval_ms}
+                  live={settings?.live_partials ?? true}
                   onInterval={(ms) => set(custom(cfg.endpoint, cfg.extra_body, ms))}
                 />
               </>
@@ -811,6 +825,17 @@ export function SettingsTab({ active }: { active: boolean }) {
                 목소리로 화자 나누기
               </Switch>
               <span className="fhint">마이크와 시스템 소리 모두 목소리로 화자를 나눕니다(화자 1, 2, …).</span>
+              <Switch
+                checked={settings.live_partials}
+                onChange={(live_partials) => app.updateSettings({ live_partials })}
+                describedBy="live-partials-hint"
+              >
+                실시간 전사
+              </Switch>
+              <span className="fhint" id="live-partials-hint">
+                말하는 동안 인식 중인 글과 번역을 회색 줄로 먼저 보입니다. 끄면 말이 끝난 뒤에 글과 번역만 보이고 CPU·GPU를
+                덜 씁니다. 다음 회의부터 적용합니다.
+              </span>
             </div>
           </section>
 
