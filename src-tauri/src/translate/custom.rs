@@ -1,6 +1,6 @@
 //! OpenAI-compatible chat completions provider.
 
-use super::{History, Translator, clean_output, system_prompt};
+use super::{History, Translator, clean_output, in_target_script, system_prompt, wrong_script};
 use crate::secrets::Secret;
 use anyhow::{Context, anyhow};
 use crossbeam_channel::RecvTimeoutError;
@@ -131,14 +131,14 @@ impl CustomTranslator {
         })
     }
 
-    fn request_body(&self, text: &str, source: Option<&str>, target: &str) -> Value {
+    fn request_body(&self, text: &str, source: Option<&str>, target: &str, retry: bool) -> Value {
         let mut body = self.optional_params();
         body.insert("model".into(), json!(self.model));
         body.insert("stream".into(), json!(false));
         body.insert(
             "messages".into(),
             json!([
-                {"role": "system", "content": system_prompt(source, target, self.history.lines())},
+                {"role": "system", "content": system_prompt(source, target, self.history.lines(), retry)},
                 {"role": "user", "content": text},
             ]),
         );
@@ -258,20 +258,21 @@ fn parse_content(body: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("번역 서버의 응답에 번역문이 없습니다"))
 }
 
-impl Translator for CustomTranslator {
-    fn translate(
+impl CustomTranslator {
+    /// One translation of `text`, with the retry for refused keys.
+    fn complete(
         &mut self,
         text: &str,
         source_language: Option<&str>,
         target_language: &str,
+        retry: bool,
     ) -> anyhow::Result<String> {
-        self.history.set_target(target_language);
         // A 400 that names an optional key (`extra_body` or temperature): the
         // server does not accept it. Retry once without it, at most once per
         // key. Any other 400 (bad model, bad request) is reported as it is.
         let mut dropped = Vec::new();
         let (status, response_text) = loop {
-            let body = self.request_body(text, source_language, target_language);
+            let body = self.request_body(text, source_language, target_language, retry);
             let reply = match self.post(&body) {
                 Ok(reply) => reply,
                 Err(e) => {
@@ -320,11 +321,27 @@ impl Translator for CustomTranslator {
         if translation.is_empty() {
             return Err(anyhow!("번역 서버가 빈 번역문을 돌려주었습니다"));
         }
+        Ok(translation)
+    }
+}
+
+impl Translator for CustomTranslator {
+    fn translate(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+    ) -> anyhow::Result<String> {
+        self.history.set_target(target_language);
+        let translation = in_target_script(target_language, |retry| {
+            self.complete(text, source_language, target_language, retry)
+        })?;
         self.history.push(text);
         Ok(translation)
     }
 
     /// One request with the current parameters: no retry, no history push, no notice.
+    /// An answer in a wrong script (`wrong_script`) is an error.
     /// The request runs on its own thread. When `stop` returns true, this
     /// returns at once and the reply is dropped, so a final utterance does not
     /// wait for a slow server.
@@ -338,7 +355,8 @@ impl Translator for CustomTranslator {
         if stop() {
             return Err(anyhow!("stopped"));
         }
-        let request = self.request(&self.request_body(text, source_language, target_language));
+        let request =
+            self.request(&self.request_body(text, source_language, target_language, false));
         let (tx, rx) = crossbeam_channel::bounded(1);
         std::thread::spawn(move || {
             let _ = tx.send(send(request));
@@ -357,6 +375,9 @@ impl Translator for CustomTranslator {
         let translation = clean_output(&parse_content(&response_text)?, text);
         if translation.is_empty() {
             return Err(anyhow!("번역 서버가 빈 번역문을 돌려주었습니다"));
+        }
+        if wrong_script(&translation, target_language) {
+            return Err(anyhow!("번역 서버가 다른 언어로 답했습니다"));
         }
         Ok(translation)
     }
@@ -468,6 +489,22 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_in_the_source_script_is_asked_again() {
+        let (base_url, server) = mock_server_seq(vec![
+            ("200 OK", ok_body("そして、仮に移して。")),
+            ("200 OK", ok_body("그리고 임시로 옮겨서.")),
+        ]);
+        let mut t = translator(base_url, None);
+        let out = t.translate("と、仮に移して。", Some("ja"), "ko").unwrap();
+        assert_eq!(out, "그리고 임시로 옮겨서.");
+        let requests = server.join().unwrap();
+        let system = |i: usize| request_json(&requests[i])["messages"][0]["content"].clone();
+        assert!(!system(0).as_str().unwrap().contains("last answer"));
+        assert!(system(1).as_str().unwrap().contains("in Korean only"));
+        assert_eq!(t.history.lines().len(), 1);
+    }
+
+    #[test]
     fn request_shape_and_bearer_with_key() {
         let (base_url, server) = mock_server("200 OK", &ok_body("Translation: \"안녕하세요\""));
         let mut t = translator(format!("{base_url}/"), Some("sk-secret-123"));
@@ -521,7 +558,7 @@ mod tests {
         t.translate("one", Some("en"), "ko").unwrap();
         server.join().unwrap();
         // The context is sent to the next request.
-        let body = t.request_body("two", Some("en"), "ko");
+        let body = t.request_body("two", Some("en"), "ko", false);
         assert!(
             body["messages"][0]["content"]
                 .as_str()
@@ -537,7 +574,7 @@ mod tests {
         for line in ["one", "two", "three"] {
             t.history.push(line);
         }
-        let body = t.request_body("four", Some("en"), "ko");
+        let body = t.request_body("four", Some("en"), "ko", false);
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.ends_with("\n- two\n- three"), "{system}");
         assert!(!system.contains("- one"), "{system}");
@@ -550,7 +587,7 @@ mod tests {
         t.history = History::new(0);
         t.translate("one", Some("en"), "ko").unwrap();
         server.join().unwrap();
-        let body = t.request_body("two", Some("en"), "ko");
+        let body = t.request_body("two", Some("en"), "ko", false);
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(!system.contains("Earlier lines"), "{system}");
         assert!(!system.contains("one"), "{system}");
@@ -899,7 +936,7 @@ mod tests {
         let requests = server.join().unwrap();
         let system = |body: &Value| body["messages"][0]["content"].as_str().unwrap().to_string();
         assert!(system(&request_json(&requests[1])).contains("- one"));
-        let next = system(&t.request_body("three", Some("en"), "ko"));
+        let next = system(&t.request_body("three", Some("en"), "ko", false));
         assert!(next.contains("- one") && !next.contains("two so"), "{next}");
     }
 
