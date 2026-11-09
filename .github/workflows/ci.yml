@@ -53,7 +53,7 @@ jobs:
           files=$(git diff --name-only "$base" HEAD)
           echo "$files"
           has() { grep -qE "$1" <<<"$files" && echo true || echo false; }
-          echo "rust=$(has '^(src-tauri/|\.github/)')" >> "$GITHUB_OUTPUT"
+          echo "rust=$(has '^(src-tauri/|\.github/|rust-toolchain\.toml)')" >> "$GITHUB_OUTPUT"
           echo "ui=$(has '^(src/|index\.html|package\.json|pnpm-lock\.yaml|tsconfig|vite\.config|\.github/)')" >> "$GITHUB_OUTPUT"
 
   # OS-independent checks, once on Linux.
@@ -63,6 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Rust toolchain (rust-toolchain.toml)
+        if: needs.changes.outputs.rust == 'true'
+        run: rustup toolchain install --no-self-update
       - name: Rust format
         if: needs.changes.outputs.rust == 'true'
         working-directory: src-tauri
@@ -94,9 +97,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'
@@ -110,8 +112,6 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: check
-          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
-          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           # The unpacked sherpa-onnx libs live outside target/debug.
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
           # Only the integration branch and master save; work branches restore.
@@ -130,7 +130,7 @@ jobs:
   # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*;
   # Whisper small (whisper.cpp): speech::whisper; Fun-ASR-MLT-Nano Q8_0
   # (transcribe.cpp): speech::funasr. Manual runs only (about 5.1 GB of models,
-  # cached).
+  # cached; only master saves).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'e2e' }}
     strategy:
@@ -144,7 +144,8 @@ jobs:
       MORAGO_TEST_WAVS: ${{ github.workspace }}/e2e/wavs
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'
@@ -156,10 +157,12 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: e2e
-          # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
-          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
           cache-directories: src-tauri/target/sherpa-onnx-prebuilt
-      - uses: actions/cache@v4
+          # A cache stays in the ref that saved it: branch copies only push
+          # the master caches out of the 10 GB repository limit.
+          save-if: ${{ github.ref_name == 'master' }}
+      - uses: actions/cache/restore@v4
+        id: models
         with:
           path: e2e/models
           key: e2e-models-v4
@@ -185,6 +188,11 @@ jobs:
         env:
           MORAGO_TEST_MODELS_DIR: ${{ github.workspace }}/e2e/models
         run: cargo test --lib translate::local::tests::local_model -- --ignored --nocapture --test-threads=1
+      - uses: actions/cache/save@v4
+        if: github.ref_name == 'master' && steps.models.outputs.cache-hit != 'true'
+        with:
+          path: e2e/models
+          key: e2e-models-v4
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs with job=bundle.
   bundle:
@@ -207,7 +215,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update
       - uses: ./.github/actions/sherpa-libs
       - uses: ./.github/actions/cuda-toolkit
         if: runner.os == 'Windows'

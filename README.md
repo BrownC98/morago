@@ -62,7 +62,7 @@ Fun-ASR-MLT-Nano는 transcribe.cpp(GGUF Q8_0, `handy-computer`가 변환한 파�
 
 ## 설치와 실행(개발)
 
-준비물: Node.js 24, pnpm 11, Rust stable, cmake, clang.
+준비물: Node.js 24, pnpm 11, rustup(Rust 버전은 `rust-toolchain.toml`), cmake, clang.
 
 - Windows: Visual Studio Build Tools(C++), WebView2(Windows 11에는 기본 포함), CUDA Toolkit 12.9(`CUDA_PATH`), Ninja. llama.cpp CUDA 빌드는 「x64 Native Tools」 명령 창(vcvars64)에서 `CMAKE_GENERATOR=Ninja`로 한다. Visual Studio 생성기는 긴 CUDA 경로에서 실패한다. GPU 아키텍처는 `src-tauri/.cargo/config.toml`의 `CMAKE_CUDA_ARCHITECTURES`이다. 처음 빌드는 오래 걸린다(16코어에서 약 30분). `scripts/win-check.sh`는 이 환경을 맞춘다.
 - macOS: Xcode Command Line Tools(`xcode-select --install`).
