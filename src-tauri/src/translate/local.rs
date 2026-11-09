@@ -61,7 +61,7 @@ impl LocalTranslator {
         if let Some((_, name)) = &placement.gpu {
             // The first run on a GPU loads its kernels and is slow: do it before the meeting.
             translator
-                .generate("Translate into Korean.", "Hello.")
+                .generate("Translate into Korean.", "Hello.", &|| false)
                 .map_err(|e| gpu::load_error(name, &e.to_string()))?;
         }
         Ok(translator)
@@ -82,7 +82,13 @@ impl LocalTranslator {
         }
     }
 
-    fn generate(&self, system: &str, text: &str) -> anyhow::Result<String> {
+    /// Stops with an error before the next token when `stop` returns true.
+    fn generate(
+        &self,
+        system: &str,
+        text: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
         let backend = gpu::llama_backend()?;
         let prompt = gemma4_prompt(system, text);
         let vocab = self.model.vocab();
@@ -120,6 +126,9 @@ impl LocalTranslator {
         let mut sampler = LlamaSampler::greedy();
         let mut bytes = Vec::new();
         for pos in (i32::try_from(prompt_tokens.len())?..).take(max_new) {
+            if stop() {
+                return Err(anyhow!("stopped"));
+            }
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             if vocab.is_eog(token) || pos >= i32::try_from(n_ctx)? {
                 break;
@@ -140,8 +149,19 @@ impl Translator for LocalTranslator {
         source_language: Option<&str>,
         target_language: &str,
     ) -> anyhow::Result<String> {
+        self.translate_partial(text, source_language, target_language, &|| false)
+    }
+
+    /// The same as `translate`: this provider keeps no history.
+    fn translate_partial(
+        &mut self,
+        text: &str,
+        source_language: Option<&str>,
+        target_language: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> anyhow::Result<String> {
         let system = system_prompt(source_language, target_language, &History::default());
-        let raw = self.generate(&system, text)?;
+        let raw = self.generate(&system, text, stop)?;
         let translation = clean_output(&raw, text);
         if translation.is_empty() {
             return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));

@@ -53,10 +53,14 @@ export interface Endpoint {
 /** Value of `reasoning_effort` for a custom translation server. Absent = default (not sent). */
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
 
-/** `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has `reasoning_effort`. */
+/**
+ * `AsrConfig` and `TranslateConfig` have the same JSON shape. Only translate has `reasoning_effort` and
+ * `partial_interval_ms` (least time between two partial translation requests of one speech; null = off,
+ * absent = 1500).
+ */
 export type ProviderConfig =
   | { kind: "local"; model_id: string }
-  | { kind: "custom"; endpoint: Endpoint; reasoning_effort?: ReasoningEffort };
+  | { kind: "custom"; endpoint: Endpoint; reasoning_effort?: ReasoningEffort; partial_interval_ms?: number | null };
 
 export type ThemeSetting = "light" | "dark" | "system";
 
@@ -127,7 +131,10 @@ export type EngineStage = "capture" | "asr" | "translate" | "store" | "model" | 
 export interface PartialText {
   source: SourceKind;
   start_ms: number;
+  /** Empty: remove the line of a speech that started before `start_ms`. */
   text: string;
+  /** Provisional translation; it can be of an older, shorter `text`. */
+  translation: string | null;
 }
 
 export interface EventMap {
