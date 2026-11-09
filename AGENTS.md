@@ -35,5 +35,5 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 - Completion evidence and gate: the GitHub Actions run of `.github/workflows/ci.yml` for the exact head commit passes the `check` job on Windows and macOS (fmt, clippy, tests). Push, then `scripts/gate/check.sh` finds and waits for that run. Save the run URL in your task `logs/`.
 - Installers (NSIS, dmg): the `bundle` job runs only on tags `v*` and manual runs: `gh workflow run ci.yml --ref <branch> -f job=bundle`.
 - End-to-end test with real models: manual run (`gh workflow run ci.yml --ref <branch> -f job=e2e`), job `e2e` (Windows, macOS).
-- Run the app: `LLAMA_LIB_PROFILE=Release pnpm tauri dev`.
+- Run the app: `LLAMA_LIB_PROFILE=Release pnpm tauri dev`. On the Windows host of this PC, from WSL: `scripts/win-check.sh run` builds the work tree (target `C:\mcr`; the first CUDA build is long) and starts it.
 - Manual audio device test: `docs/manual-audio-test.md`.
