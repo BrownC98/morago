@@ -132,9 +132,9 @@ pub struct Settings {
     /// it and gives it as the utterance language.
     pub meeting_language: Option<String>,
     pub translate: TranslateConfig,
-    /// Most earlier utterances that both translators send as context (from 1,
-    /// default 4). The local model leaves out the oldest lines that do not
-    /// fit its context.
+    /// Most earlier utterances that both translators send as context
+    /// (default 4; 0 = no context). The local model leaves out the oldest
+    /// lines that do not fit its context.
     #[serde(deserialize_with = "context_lines_or_default")]
     pub translate_context_lines: u32,
     pub diarize: bool,
@@ -170,15 +170,16 @@ impl Default for Settings {
 
 const DEFAULT_CONTEXT_LINES: u32 = 4;
 
-/// A hand-edited value that is not an integer from 1 in `u32` gets the
-/// default, not the whole file.
+/// A hand-edited value that is not an integer in `u32` gets the default,
+/// not the whole file.
 fn context_lines_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     Ok(Value::deserialize(d)?
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
-        .filter(|&n| n >= 1)
         .unwrap_or_else(|| {
-            log::warn!("settings file: translate_context_lines is not a whole number from 1; used the default");
+            log::warn!(
+                "settings file: translate_context_lines is not a whole number; used the default"
+            );
             DEFAULT_CONTEXT_LINES
         }))
 }
@@ -371,7 +372,7 @@ mod tests {
             ("", 4),
             (r#","translate_context_lines":1"#, 1),
             (r#","translate_context_lines":4294967295"#, u32::MAX),
-            (r#","translate_context_lines":0"#, 4),
+            (r#","translate_context_lines":0"#, 0),
             (r#","translate_context_lines":-3"#, 4),
             (r#","translate_context_lines":2.5"#, 4),
             (r#","translate_context_lines":"8""#, 4),

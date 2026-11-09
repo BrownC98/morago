@@ -544,6 +544,19 @@ mod tests {
     }
 
     #[test]
+    fn zero_context_lines_send_no_context_block() {
+        let (base_url, server) = mock_server("200 OK", &ok_body("하나"));
+        let mut t = translator(base_url, None);
+        t.history = History::new(0);
+        t.translate("one", Some("en"), "ko").unwrap();
+        server.join().unwrap();
+        let body = t.request_body("two", Some("en"), "ko");
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains("Earlier lines"), "{system}");
+        assert!(!system.contains("one"), "{system}");
+    }
+
+    #[test]
     fn context_resets_on_target_change_and_new_session() {
         let (base_url, server) = mock_server_seq(vec![
             ("200 OK", ok_body("하나")),

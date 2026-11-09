@@ -689,8 +689,8 @@ export function SettingsTab({ active }: { active: boolean }) {
                   label="번역 문맥 줄 수"
                   unit="줄"
                   value={settings.translate_context_lines}
-                  min={1}
-                  hint="번역할 때 앞 발화를 이 줄 수만큼 문맥으로 함께 보냅니다(기본값 4). 줄이 많을수록 번역이 느려지고 사용자 지정 서비스의 요금이 늘어납니다. 로컬 모델에 다 들어가지 않으면 오래된 줄부터 뺍니다."
+                  min={0}
+                  hint="번역할 때 앞 발화를 이 줄 수만큼 문맥으로 함께 보냅니다(기본값 4). 0이면 문맥 없이 보냅니다. 줄이 많을수록 번역이 느려지고 사용자 지정 서비스의 요금이 늘어납니다. 로컬 모델에 다 들어가지 않으면 오래된 줄부터 뺍니다."
                   onCommit={(translate_context_lines) => app.updateSettings({ translate_context_lines })}
                 />
               </div>

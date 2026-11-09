@@ -334,6 +334,16 @@ mod tests {
     }
 
     #[test]
+    fn zero_context_lines_send_no_context_block() {
+        let mut history = History::new(0);
+        history.push("one");
+        assert!(history.lines.is_empty());
+        let p = system_prompt(Some("en"), "ko", history.lines());
+        assert!(!p.contains("Earlier lines"), "{p}");
+        assert!(!p.contains("one"), "{p}");
+    }
+
+    #[test]
     fn history_clears_when_the_target_changes() {
         let mut history = History::new(4);
         history.set_target("ko");
