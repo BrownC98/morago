@@ -11,16 +11,11 @@ use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
 
-/// GPU memory that one translation context needs at most (KV cache and
-/// compute buffers of a short prompt), with a margin.
-const CONTEXT_MEMORY: u64 = 512 * 1024 * 1024;
-
 pub(crate) struct LocalTranslator {
     model: LlamaModel,
     label: String,
     threads: i32,
-    /// ggml device index and name when the model is on a GPU.
-    gpu: Option<(usize, String)>,
+    on_gpu: bool,
     history: History,
 }
 
@@ -58,7 +53,7 @@ impl LocalTranslator {
             model,
             label: format!("로컬 {}", crate::models::display_name(model_id)),
             threads,
-            gpu: placement.gpu.clone(),
+            on_gpu: placement.gpu.is_some(),
             history,
         };
         if let Some((_, name)) = &placement.gpu {
@@ -75,13 +70,14 @@ impl LocalTranslator {
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        match &self.gpu {
-            Some(_) => GpuFailure(format!(
+        if self.on_gpu {
+            GpuFailure(format!(
                 "번역 모델이 GPU에서 오류를 냈습니다: {}.",
                 gpu::failure_cause(&e)
             ))
-            .into(),
-            None => e.into(),
+            .into()
+        } else {
+            e.into()
         }
     }
 
@@ -125,13 +121,6 @@ impl LocalTranslator {
         let n_ctx = (prompt_tokens.len() + max_new + 8).min(limit);
         if prompt_tokens.len() + 1 >= n_ctx {
             return Err(anyhow!("문장이 너무 길어 번역하지 못했습니다"));
-        }
-        if let Some((index, name)) = &self.gpu {
-            // A failed CUDA allocation ends the process: check before the context.
-            let free = gpu::free_memory(*index).unwrap_or(0);
-            if free < CONTEXT_MEMORY {
-                return Err(GpuFailure(format!("{name}의 GPU 메모리가 모자랍니다.")).into());
-            }
         }
         let n_ctx = u32::try_from(n_ctx)?;
         let params = LlamaContextParams::default()
@@ -311,10 +300,7 @@ mod tests {
             Ok("off") => GpuSetting::Off,
             _ => GpuSetting::Auto,
         };
-        let size = std::fs::metadata(dir.join(MODEL_ID).join("model.gguf"))
-            .unwrap()
-            .len();
-        let placement = gpu::place(&setting, size).unwrap();
+        let placement = gpu::place(&setting).unwrap();
         println!("device: {:?}", placement.status);
         let model_started = Instant::now();
         let mut t = LocalTranslator::load(&dir, MODEL_ID, History::new(4), &placement).unwrap();
@@ -350,8 +336,8 @@ mod tests {
         }
     }
 
-    /// D2 B without the memory check of `gpu::place`: a model too big for the
-    /// GPU gives an error (the meeting does not start), not an abort.
+    /// D2 B: a model too big for the GPU gives an error (the meeting does
+    /// not start), not an abort.
     /// Run: `MORAGO_TEST_BIG_GGUF=<12B model.gguf> LLAMA_LIB_PROFILE=Release
     /// cargo test big_model -- --ignored --nocapture`
     #[test]
@@ -362,18 +348,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("big")).unwrap();
         std::fs::hard_link(&gguf, dir.path().join("big").join("model.gguf")).unwrap();
-        let size = std::fs::metadata(&gguf).unwrap().len();
-        let checked = gpu::place(&GpuSetting::Auto, size).unwrap();
-        println!("place: {:?}", checked.status);
+        let placement = gpu::place(&GpuSetting::Auto).unwrap();
         assert!(
-            !checked.status.gpu,
-            "the memory check must keep it on the CPU"
+            placement.status.gpu,
+            "no usable GPU: {:?}",
+            placement.status
         );
-
-        let forced = gpu::place(&GpuSetting::Auto, 0).unwrap();
-        assert!(forced.status.gpu, "no usable GPU: {:?}", forced.status);
         let started = Instant::now();
-        let err = LocalTranslator::load(dir.path(), "big", History::new(4), &forced)
+        let err = LocalTranslator::load(dir.path(), "big", History::new(4), &placement)
             .err()
             .unwrap()
             .to_string();

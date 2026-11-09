@@ -3,6 +3,7 @@
 
 mod custom;
 mod diarize;
+mod funasr;
 mod local;
 mod vad;
 mod wav;
@@ -26,13 +27,17 @@ pub trait Asr: Send {
     fn transcribe(&mut self, segment: &SpeechSegment) -> anyhow::Result<Transcript>;
     /// Label for the UI and session meta, for example "로컬 SenseVoice Small".
     fn label(&self) -> String;
+    /// Makes this instance the live partial ASR (`engine::partial`). A model
+    /// that shares its compute with the final ASR then gives way to final runs.
+    fn set_partial(&mut self) {}
 }
 
 /// Builds the ASR from settings. Local models are in `models_dir`.
 /// `language` (ISO 639-1, `Settings::meeting_language`): `None` = detect per
 /// segment; else the ASR uses it and returns it as `Transcript::language`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
-/// `placement`: the device of a Whisper model; the other models use the CPU.
+/// `placement`: the device of a Whisper or Fun-ASR model; the sherpa-onnx
+/// models use the CPU. Two Fun-ASR on one device share one loaded model.
 pub fn build_asr(
     config: &AsrConfig,
     language: Option<&str>,
@@ -45,6 +50,9 @@ pub fn build_asr(
                 models_dir, model_id, language, placement,
             )?))
         }
+        AsrConfig::Local { model_id } if model_id == models::FUN_ASR_MLT_ID => Ok(Box::new(
+            funasr::FunAsr::new(models_dir, model_id, language, placement)?,
+        )),
         AsrConfig::Local { model_id } => Ok(Box::new(local::LocalAsr::new(
             models_dir, model_id, language,
         )?)),

@@ -475,10 +475,10 @@ mod tests {
         assert!(!text.contains("LEAK1234"), "{text}");
     }
 
-    /// The ids of the sherpa-onnx Whisper models (before 2026-11-09) are now
-    /// the whisper.cpp models of the same size.
+    /// The ids of the sherpa-onnx Whisper and Fun-ASR models (before
+    /// 2026-11-09) are now the whisper.cpp and transcribe.cpp models.
     #[test]
-    fn a_file_with_a_whisper_model_keeps_it() {
+    fn a_file_with_a_whisper_or_fun_asr_model_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         assert_eq!(
@@ -492,6 +492,7 @@ mod tests {
             "whisper-small",
             "whisper-medium",
             "whisper-turbo",
+            crate::models::FUN_ASR_MLT_ID,
         ] {
             std::fs::write(
                 &path,

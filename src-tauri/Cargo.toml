@@ -1,6 +1,6 @@
 [package]
 name = "morago"
-version = "0.3.0"
+version = "0.4.0"
 description = "Meeting minutes with live translated subtitles"
 authors = ["morago"]
 edition = "2024"
@@ -44,6 +44,8 @@ llama-cpp-2 = { version = "0.1.161", default-features = false }
 llama-cpp-sys-2 = "0.1.161"
 # Local Whisper. whisper.cpp builds on the ggml of llama-cpp-2: vendor/whisper-rs-sys.
 whisper-rs = { version = "=0.16.0", default-features = false }
+# Local Fun-ASR (transcribe.cpp). It builds on the ggml of llama-cpp-2: vendor/transcribe-cpp-sys.
+transcribe-cpp = { version = "=0.4.1", default-features = false }
 sha2 = "0.11"
 # Unpacks the NVIDIA CUDA archives of the "GPU 구성 요소" pack (gpu.rs).
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
@@ -76,6 +78,7 @@ hound = "3"
 
 [patch.crates-io]
 whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
+transcribe-cpp-sys = { path = "vendor/transcribe-cpp-sys" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
