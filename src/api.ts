@@ -85,6 +85,8 @@ export interface GpuStatus {
   } | null;
   /** Device of the local translation model; null when a service translates. */
   translate: ModelDevice | null;
+  /** Device of the local speech recognition model; null when a service recognizes. */
+  asr: ModelDevice | null;
 }
 
 export interface Settings {

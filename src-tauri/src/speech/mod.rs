@@ -8,6 +8,7 @@ mod vad;
 mod wav;
 mod whisper;
 
+use crate::gpu::Placement;
 use crate::models;
 use crate::secrets::{self, Role};
 use crate::settings::AsrConfig;
@@ -31,15 +32,19 @@ pub trait Asr: Send {
 /// `language` (ISO 639-1, `Settings::meeting_language`): `None` = detect per
 /// segment; else the ASR uses it and returns it as `Transcript::language`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
+/// `placement`: the device of a Whisper model; the other models use the CPU.
 pub fn build_asr(
     config: &AsrConfig,
     language: Option<&str>,
     models_dir: &Path,
+    placement: &Placement,
 ) -> anyhow::Result<Box<dyn Asr>> {
     match config {
-        AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => Ok(
-            Box::new(whisper::WhisperAsr::new(models_dir, model_id, language)?),
-        ),
+        AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
+            Ok(Box::new(whisper::WhisperAsr::new(
+                models_dir, model_id, language, placement,
+            )?))
+        }
         AsrConfig::Local { model_id } => Ok(Box::new(local::LocalAsr::new(
             models_dir, model_id, language,
         )?)),
@@ -125,6 +130,7 @@ mod tests {
             },
             None,
             &models_dir,
+            &Placement::cpu(""),
         )
         .unwrap();
         println!("ASR: {}", asr.label());

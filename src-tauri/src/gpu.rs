@@ -1,4 +1,6 @@
-//! GPU use for the local translation model (llama.cpp).
+//! GPU use for the local models: translation (llama.cpp) and Whisper
+//! (whisper.cpp). Both run on the one ggml of llama.cpp, so they share its
+//! GPU backend, the pack and this placement.
 //! - Windows: CUDA on NVIDIA GPUs. The CUDA runtime DLLs are not in the
 //!   installer: the "GPU 구성 요소" pack downloads them from NVIDIA on demand
 //!   (`download_pack`). build.rs delay-loads them, so the app starts and runs
@@ -198,19 +200,29 @@ fn unpack(
     Ok(())
 }
 
-/// llama.cpp allows one backend per process. Its log goes to `log`; the last
-/// error lines give the cause of a failure (`failure_cause`).
+unsafe extern "C" {
+    /// whisper.cpp (vendor/whisper-rs-sys). It sets the ggml log too, and each
+    /// Whisper context sets the ggml log again to this callback.
+    fn whisper_log_set(callback: llama_cpp_sys_2::ggml_log_callback, user_data: *mut c_void);
+}
+
+/// llama.cpp allows one backend per process. The log of llama.cpp,
+/// whisper.cpp and ggml goes to `log`; the last error lines give the cause of
+/// a failure (`failure_cause`). Call it before the first Whisper context.
 pub fn llama_backend() -> anyhow::Result<&'static LlamaBackend> {
     static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
     BACKEND
         .get_or_init(|| {
             let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
             // SAFETY: `on_log` is a valid callback for the life of the process.
-            unsafe { llama_cpp_sys_2::llama_log_set(Some(on_log), std::ptr::null_mut()) };
+            unsafe {
+                llama_cpp_sys_2::llama_log_set(Some(on_log), std::ptr::null_mut());
+                whisper_log_set(Some(on_log), std::ptr::null_mut());
+            }
             Ok(backend)
         })
         .as_ref()
-        .map_err(|e| anyhow!("번역 엔진을 시작하지 못했습니다: {e}"))
+        .map_err(|e| anyhow!("로컬 모델 엔진을 시작하지 못했습니다: {e}"))
 }
 
 static LLAMA_ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -227,7 +239,7 @@ unsafe extern "C" fn on_log(
     let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
     let text = text.trim();
     if level == llama_cpp_sys_2::GGML_LOG_LEVEL_ERROR {
-        log::error!("llama.cpp: {text}");
+        log::error!("ggml: {text}");
         if let Ok(mut errors) = LLAMA_ERRORS.lock() {
             if errors.len() >= 8 {
                 errors.remove(0);
@@ -235,7 +247,7 @@ unsafe extern "C" fn on_log(
             errors.push(text.to_string());
         }
     } else if level == llama_cpp_sys_2::GGML_LOG_LEVEL_WARN {
-        log::warn!("llama.cpp: {text}");
+        log::warn!("ggml: {text}");
     }
 }
 
@@ -274,10 +286,16 @@ impl std::fmt::Display for GpuFailure {
 
 impl std::error::Error for GpuFailure {}
 
-/// The error when a model does not load on the GPU (D2 B: the meeting does not start).
+/// The error when the translation model does not load on the GPU (D2 B: the
+/// meeting does not start).
 pub fn load_error(gpu_name: &str, cause: &str) -> anyhow::Error {
+    model_load_error("번역 모델", gpu_name, cause)
+}
+
+/// `model`: "번역 모델", "음성 인식 모델".
+pub fn model_load_error(model: &str, gpu_name: &str, cause: &str) -> anyhow::Error {
     let cause = cause.trim_end_matches('.');
-    anyhow!("번역 모델을 {gpu_name}에 불러오지 못했습니다. 원인: {cause}. {CHOOSE_OTHER}")
+    anyhow!("{model}을 {gpu_name}에 불러오지 못했습니다. 원인: {cause}. {CHOOSE_OTHER}")
 }
 
 /// A GPU that the setting list offers.
@@ -360,10 +378,60 @@ pub fn free_memory(index: usize) -> Option<u64> {
         .map(|d| d.memory_free as u64)
 }
 
-/// GPU memory that a model of `model_bytes` needs: the weights, the small
-/// translation context and the CUDA buffers, with a margin.
-fn needed_memory(model_bytes: u64) -> u64 {
-    model_bytes + model_bytes * 3 / 10 + 512 * MIB
+/// whisper.cpp numbers only the GPU devices of ggml (`gpu_device`).
+pub fn gpu_ordinal(index: usize) -> i32 {
+    list_llama_ggml_backend_devices()
+        .iter()
+        .filter(|d| {
+            d.index < index
+                && matches!(
+                    d.device_type,
+                    LlamaBackendDeviceType::Gpu | LlamaBackendDeviceType::IntegratedGpu
+                )
+        })
+        .count() as i32
+}
+
+/// GPU memory that the translation model of `model_bytes` needs: the weights,
+/// the small context and the CUDA buffers of the process, with a margin.
+pub fn needed_memory(model_bytes: u64) -> u64 {
+    model_bytes + model_bytes * 3 / 10 + CUDA_BUFFERS
+}
+
+const CUDA_BUFFERS: u64 = 512 * MIB;
+
+/// The encoder and decoder buffers of whisper.cpp. Measured on CUDA
+/// (2026-11-09): small 1.6 GB and turbo 2.3 GB alone, 1.3 GB and 2.1 GB
+/// next to Gemma 4 E2B.
+const WHISPER_BUFFERS: u64 = 1536 * MIB;
+
+/// GPU memory that a Whisper model of `model_bytes` needs. Next to the
+/// translation model it uses the CUDA buffers that `needed_memory` counts.
+pub fn whisper_memory(model_bytes: u64, beside_translation: bool) -> u64 {
+    let need = needed_memory(model_bytes) + WHISPER_BUFFERS;
+    if beside_translation {
+        need - CUDA_BUFFERS
+    } else {
+        need
+    }
+}
+
+/// The CPU reason when a model that needs `need` bytes does not fit in the
+/// `free` bytes of the GPU next to the translation model (`beside` bytes).
+fn memory_shortage(gpu_name: &str, free: u64, need: u64, beside: u64) -> Option<String> {
+    if free >= need + beside {
+        return None;
+    }
+    let with = if beside > 0 {
+        "번역 모델과 함께 "
+    } else {
+        ""
+    };
+    Some(format!(
+        "GPU 메모리가 모자랍니다: {gpu_name}에 남은 메모리 {}, {with}필요 {}.",
+        gb(free),
+        gb(need + beside)
+    ))
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -392,10 +460,19 @@ impl Placement {
     }
 }
 
-/// Picks the device for a model of `model_bytes`. An error (the chosen GPU is
-/// not on this PC) stops the meeting start (D2 B); every other reason not to
-/// use a GPU gives the CPU and says why.
+/// `place_beside` for one translation model alone.
+#[cfg(test)]
 pub fn place(setting: &GpuSetting, model_bytes: u64) -> anyhow::Result<Placement> {
+    place_beside(setting, needed_memory(model_bytes), 0)
+}
+
+/// Picks the device for a model that needs `need` bytes (`needed_memory`,
+/// `whisper_memory`), next to the translation model of the same session that
+/// needs `beside` bytes on the same GPU, or 0. Both models are not loaded yet:
+/// the free memory must hold both. An error (the chosen GPU is not on this PC)
+/// stops the meeting start (D2 B); every other reason not to use a GPU gives
+/// the CPU and says why.
+pub fn place_beside(setting: &GpuSetting, need: u64, beside: u64) -> anyhow::Result<Placement> {
     let gpu = match setting {
         GpuSetting::Off => return Ok(Placement::cpu("GPU 가속을 껐습니다.")),
         GpuSetting::Auto => match gpus()
@@ -428,15 +505,8 @@ pub fn place(setting: &GpuSetting, model_bytes: u64) -> anyhow::Result<Placement
             gpu.name, gpu.backend
         )));
     };
-    let need = needed_memory(model_bytes);
-    let free = dev.memory_free as u64;
-    if free < need {
-        return Ok(Placement::cpu(format!(
-            "GPU 메모리가 모자랍니다: {}에 남은 메모리 {}, 필요 {}.",
-            gpu.name,
-            gb(free),
-            gb(need)
-        )));
+    if let Some(reason) = memory_shortage(&gpu.name, dev.memory_free as u64, need, beside) {
+        return Ok(Placement::cpu(reason));
     }
     Ok(Placement {
         gpu: Some((dev.index, gpu.name.clone())),
@@ -476,10 +546,12 @@ pub struct GpuStatus {
     pub pack: Option<PackStatus>,
     /// Device of the local translation model; `None` when a service translates.
     pub translate: Option<ModelDevice>,
+    /// Device of the local speech recognition model; `None` when a service recognizes.
+    pub asr: Option<ModelDevice>,
 }
 
-/// `translate_bytes`: size of the local translation model, if one is set.
-pub fn status(setting: &GpuSetting, translate_bytes: Option<u64>) -> GpuStatus {
+/// `translate`, `asr`: devices of the local models (`engine::model_devices`).
+pub fn status(translate: Option<ModelDevice>, asr: Option<ModelDevice>) -> GpuStatus {
     let gpus = gpus();
     let pack = (cfg!(windows) && gpus.iter().any(|g| g.problem.is_none())).then(|| {
         let installed = GPU_DIR.get().is_some_and(|d| pack_installed(d));
@@ -489,7 +561,7 @@ pub fn status(setting: &GpuSetting, translate_bytes: Option<u64>) -> GpuStatus {
             installed,
             needs_restart: installed && !PACK_ACTIVE.load(Ordering::Relaxed),
             note: format!(
-                "NVIDIA GPU에서 번역하는 CUDA 런타임입니다. NVIDIA 서버에서 내려받고, 풀면 {}입니다. {DRIVER_NOTE}",
+                "NVIDIA GPU에서 음성 인식과 번역을 돌리는 CUDA 런타임입니다. NVIDIA 서버에서 내려받고, 풀면 {}입니다. {DRIVER_NOTE}",
                 gb(PACK_FILES.iter().map(|f| f.size).sum())
             ),
         }
@@ -498,13 +570,8 @@ pub fn status(setting: &GpuSetting, translate_bytes: Option<u64>) -> GpuStatus {
         gpus: gpus.iter().map(|g| g.name.clone()).collect(),
         hint: cfg!(windows).then_some("GPU 가속은 NVIDIA GPU(CUDA)만 씁니다."),
         pack,
-        translate: translate_bytes.map(|bytes| match place(setting, bytes) {
-            Ok(p) => p.status,
-            Err(e) => ModelDevice {
-                gpu: false,
-                detail: e.to_string(),
-            },
-        }),
+        translate,
+        asr,
     }
 }
 
@@ -779,6 +846,32 @@ mod tests {
     }
 
     #[test]
+    fn whisper_counts_the_translation_model_on_the_same_gpu() {
+        let gpu = "NVIDIA GeForce RTX 5060 Laptop GPU";
+        let e2b = needed_memory(3_349_516_256);
+        let turbo = 574_041_195;
+        let beside = whisper_memory(turbo, true);
+        let alone = whisper_memory(turbo, false);
+        // Measured on CUDA: 2.1 GB next to E2B, 2.3 GB alone.
+        assert!(beside > 2_150 * MIB && alone > 2_400 * MIB);
+        assert_eq!(alone - beside, CUDA_BUFFERS);
+        // The RTX 5060 Laptop GPU (8 GB) had 6.9 GB free: both fit.
+        let free_8gb = 7_033 * MIB;
+        assert_eq!(memory_shortage(gpu, free_8gb, e2b, 0), None);
+        assert_eq!(memory_shortage(gpu, free_8gb, beside, e2b), None);
+        // Translation fits alone, Whisper does not fit next to it.
+        let free = e2b + beside / 2;
+        assert_eq!(memory_shortage(gpu, free, e2b, 0), None);
+        let reason = memory_shortage(gpu, free, beside, e2b).unwrap();
+        assert!(reason.contains("번역 모델과 함께 필요"), "{reason}");
+        assert!(reason.contains(&gb(e2b + beside)), "{reason}");
+        // Translation on the CPU: Whisper has the GPU alone.
+        assert_eq!(memory_shortage(gpu, free, alone, 0), None);
+        let short = memory_shortage(gpu, alone - 1, alone, 0).unwrap();
+        assert!(!short.contains("함께"), "{short}");
+    }
+
+    #[test]
     fn pack_takes_files_from_both_archives() {
         assert_eq!(PACK.files.len(), 2);
         for f in PACK.files {
@@ -872,7 +965,7 @@ mod tests {
         let dir = std::env::var_os("MORAGO_TEST_GPU_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("morago-gpu-test"));
-        let before = status(&GpuSetting::Auto, Some(3_349_516_256));
+        let before = place(&GpuSetting::Auto, 3_349_516_256).map(|p| p.status);
         println!("before: {before:?}");
         let last = Mutex::new(0u64);
         download_pack(

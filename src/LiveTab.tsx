@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { EngineStage } from "./api";
+import type { EngineStage, ModelDevice } from "./api";
 import { clock, languageName, number, providerLabel, TARGET_LANGUAGES } from "./format";
 import { useApp, useLevels } from "./store";
 import { Icon, Select, Switch } from "./ui";
@@ -103,9 +103,9 @@ export function LiveTab({ active }: { active: boolean }) {
 
   const asrLabel = running && meta ? meta.asr_label : providerLabel(settings.asr, models);
   const trLabel = running && meta ? meta.translator_label : providerLabel(settings.translate, models);
-  // Local speech recognition runs on the CPU; the core gives the translation device.
-  const asrLocal = running && meta ? meta.asr_label.startsWith("로컬") : settings.asr.kind === "local";
-  const trDevice = app.gpu?.translate ? (app.gpu.translate.gpu ? " · GPU" : " · CPU") : "";
+  const device = (d: ModelDevice | null | undefined) => (d ? (d.gpu ? " · GPU" : " · CPU") : "");
+  const asrDevice = device(app.gpu?.asr);
+  const trDevice = device(app.gpu?.translate);
   const otherErrors = (["capture", "store", "model"] as const).filter((s) => engineErrors[s]);
   const idle = !running && utterances.length === 0;
 
@@ -233,7 +233,7 @@ export function LiveTab({ active }: { active: boolean }) {
         <span className="bi">
           <span className={engineErrors.asr ? "dot bad" : "dot"} aria-hidden="true" />
           음성 인식: {asrLabel}
-          {asrLocal && " · CPU"}
+          {asrDevice}
           {engineErrors.asr && <span className="berr" title={engineErrors.asr}> · {engineErrors.asr}</span>}
         </span>
         <span className="bi">

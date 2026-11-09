@@ -639,6 +639,7 @@ function GpuCard() {
     { value: "off", label: "끔" },
   ];
   const tr = gpu?.translate;
+  const asr = gpu?.asr;
   return (
     <div className="card">
       <div className="fld">
@@ -690,8 +691,8 @@ function GpuCard() {
           ))}
         <DeviceRow
           name="음성 인식"
-          {...(settings.asr.kind === "local"
-            ? { device: "CPU", detail: "음성 인식은 CPU에서 돌립니다." }
+          {...(asr
+            ? { device: asr.gpu ? "GPU" : "CPU", detail: asr.detail }
             : { device: "서비스", detail: "사용자 지정 서비스가 인식합니다." })}
         />
         <DeviceRow

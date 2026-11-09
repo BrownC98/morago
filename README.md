@@ -40,11 +40,20 @@ Whisper는 whisper.cpp(ggml 형식, `ggerganov/whisper.cpp`의 파일)로 돌린
 
 ## GPU 가속
 
-로컬 번역 모델은 GPU가 있으면 GPU에서 돌린다. 설정 › GPU 가속에서 「자동」(처음 값), GPU 이름, 「끔」을 고른다. 음성 인식, 목소리 구간, 화자 구분은 CPU에서 돌린다.
+로컬 번역 모델과 Whisper 음성 인식은 GPU가 있으면 GPU에서 돌린다. 설정 › GPU 가속에서 「자동」(처음 값), GPU 이름, 「끔」을 고른다. SenseVoice, Qwen3-ASR, 목소리 구간, 화자 구분은 CPU에서 돌린다. whisper.cpp는 llama.cpp의 ggml을 함께 쓰므로 GPU 코드, GPU 구성 요소, 장치 선택이 번역과 같다.
 
 - macOS: Metal. 따로 내려받을 것이 없다.
 - Windows: NVIDIA GPU(CUDA)만 쓴다. 다른 GPU(Intel Arc 등)는 목록에 없다. 설치 파일에는 CUDA DLL이 없다. 설정에서 「GPU 구성 요소」(NVIDIA CUDA 12.9.1 런타임과 cuBLAS, 내려받기 528 MB, 풀면 0.7 GB)를 한 번 내려받고 앱을 다시 시작하면 GPU를 쓴다. 저장 위치는 앱 데이터 폴더의 `gpu`이다. NVIDIA 드라이버 528.33 이상(RTX 50 시리즈는 570.65 이상), GPU는 RTX 20(Turing) 이상이 필요하다.
 - Windows 설치 파일은 v0.1.0의 35 MB에서 181 MB로 커졌다. `morago.exe`가 GPU 4세대(RTX 20·30·40·50)의 llama.cpp CUDA 커널을 담기 때문이다(33 MB → 199 MB). 이 커널은 거의 압축되지 않는다. NVIDIA GPU가 없는 PC도 같은 설치 파일을 쓴다.
+- 두 모델은 한 GPU의 메모리를 나눠 쓴다. 회의를 시작하기 전에 남은 GPU 메모리가 두 모델의 합을 담는지 본다. 번역 모델은 파일 크기 + 30% + 512 MiB이다. Whisper는 여기에 인코더·디코더 버퍼 1.5 GiB를 더하고, 번역 모델과 함께이면 512 MiB(CUDA 버퍼)를 뺀다. 번역 모델이 먼저 GPU를 받고, 둘이 함께 들어가지 않으면 Whisper를 CPU에서 돌린다.
+- 잰 값(RTX 5060 Laptop 8 GB, CUDA, 2026-11-09, 음성 클립 20개 236초). 같은 GPU에서 다른 학습 작업이 돌았다. RTF는 처리 시간 ÷ 음성 길이이다.
+
+  | 모델 | CPU RTF | CUDA RTF | GPU 메모리(혼자 / Gemma 4 E2B와 함께) |
+  |---|---|---|---|
+  | Whisper small q8_0 | 0.36 | 0.076 | 1.6 GB / 1.3 GB |
+  | Whisper turbo q5_0 | 1.93 | 0.064 | 2.3 GB / 2.1 GB |
+
+  Gemma 4 E2B는 혼자 2.8 GB, Whisper turbo와 함께 4.9 GB를 쓴다. 8 GB GPU에 두 모델이 함께 들어간다. Whisper turbo는 CPU에서 실시간보다 느리다.
 - GPU 메모리가 모자라면 CPU에서 돌리고 설정에 그 까닭을 보인다. GPU로 모델을 불러오지 못하면 회의를 시작하지 않고 원인을 보인다. 회의 중에 GPU 오류가 나면 회의를 멈추고 저장한 뒤 오류를 보인다.
 
 ## 설치와 실행(개발)
