@@ -85,7 +85,9 @@ GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 
 
 ## 내보내기
 
-기록 탭에서 Markdown(`.md`), SRT 자막(`.srt`), JSON(`.json`)으로 내보낸다. 셋 다 화자 이름, 시작·끝 시각, 원문, 번역을 담는다.
+기록 탭에서 Markdown(`.md`), SRT 자막(`.srt`), JSON(`.json`), CSV(`.csv`)로 내보낸다. 넷 다 화자 이름, 시작·끝 시각, 원문, 번역을 담는다.
+
+CSV는 발화 하나를 한 행에 쓴다. 열: 번호, 입력, 화자 ID, 화자 이름, 시작, 종료, 시작_ms, 종료_ms, 원문 언어, 원문, 번역 상태, 번역 언어, 번역문, 번역 오류. 파일은 BOM이 있는 UTF-8이라 Excel에서 한글이 바로 보인다. `= + - @`로 시작하는 칸은 앞에 `'`를 붙여 수식으로 실행되지 않게 한다.
 
 ## 저장 형식
 

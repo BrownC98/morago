@@ -232,6 +232,7 @@ fn start_pipeline(
     };
     let translator = translate::build_translator(
         &settings.translate,
+        settings.translate_context_lines as usize,
         models_dir,
         translate_placement.as_ref().unwrap_or(&cpu()),
     )?;

@@ -169,6 +169,7 @@ input.inp { width: 100%; }
 output.inp { background: var(--a-side); overflow: hidden; }
 textarea.inp { display: block; width: 100%; height: auto; min-height: 96px; padding: 7px 10px; line-height: 1.6; resize: vertical; white-space: pre; overflow-x: auto; }
 .inp[aria-invalid="true"] { border-color: var(--a-err); }
+input.inp:disabled { cursor: not-allowed; opacity: 0.6; }
 .fld > .top-lab { align-self: start; padding-top: 7px; }
 .stack { display: grid; gap: 6px; min-width: 0; }
 .inp::placeholder { color: var(--a-ink-3); opacity: 1; }

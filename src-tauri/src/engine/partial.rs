@@ -43,7 +43,7 @@ fn translate_interval(config: &TranslateConfig, local_on_gpu: bool) -> Option<Du
         TranslateConfig::Custom {
             partial_interval_ms,
             ..
-        } => partial_interval_ms.map(|ms| Duration::from_millis(ms.clamp(500, 10_000).into())),
+        } => partial_interval_ms.map(|ms| Duration::from_millis(ms.into())),
     }
 }
 
@@ -493,13 +493,14 @@ mod tests {
         );
         // "끔": no partial translation requests.
         assert_eq!(translate_interval(&custom(None), false), None);
+        // 0: a request for each partial text, still one at a time.
         assert_eq!(
-            translate_interval(&custom(Some(100)), false),
-            Some(Duration::from_millis(500))
+            translate_interval(&custom(Some(0)), false),
+            Some(Duration::ZERO)
         );
         assert_eq!(
-            translate_interval(&custom(Some(60_000)), false),
-            Some(Duration::from_secs(10))
+            translate_interval(&custom(Some(u32::MAX)), false),
+            Some(Duration::from_millis(u32::MAX.into()))
         );
     }
 

@@ -250,6 +250,7 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
                 let placement = engine::place_models(&settings, &models_dir)?.translate;
                 let mut t = translate::build_translator(
                     &settings.translate,
+                    settings.translate_context_lines as usize,
                     &models_dir,
                     &placement.unwrap_or_else(|| gpu::Placement::cpu("")),
                 )?;

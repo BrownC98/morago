@@ -327,33 +327,100 @@ function ExtraBodyField({
   );
 }
 
-/** `partial_interval_ms`: off, then 0.5 s to 10 s in 0.5 s steps. */
-const INTERVALS: { value: string; label: string }[] = [
-  { value: "off", label: "끔" },
-  ...Array.from({ length: 20 }, (_, i) => {
-    const ms = (i + 1) * 500;
-    return { value: String(ms), label: `${ms / 1000}초${ms === 1500 ? "(기본값)" : ""}` };
-  }),
-];
+/** Largest whole number that the core stores (Rust `u32`). */
+const MAX_U32 = 4_294_967_295;
 
-/** `partial_interval_ms` of a custom translation server. */
-function IntervalField({ interval, onInterval }: { interval?: number | null; onInterval: (ms: number | null) => void }) {
+/**
+ * Label, a whole-number input and a hint, as cells of a `.fld` grid. Saves on blur or Enter;
+ * text that is not an integer from `min` shows an error and is not saved.
+ */
+function WholeNumberField({
+  id,
+  label,
+  unit,
+  value,
+  min,
+  disabled,
+  before,
+  hint,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  unit?: string;
+  value: number;
+  min: number;
+  disabled?: boolean;
+  before?: React.ReactNode;
+  hint: string;
+  onCommit: (n: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    setText(String(value));
+    setError(false);
+  }, [value, disabled]);
+
+  const commit = () => {
+    const t = text.trim();
+    const n = Number(t);
+    const ok = /^\d+$/.test(t) && n >= min && n <= MAX_U32;
+    setError(!ok);
+    if (ok && n !== value) onCommit(n);
+  };
+
   return (
     <>
-      <span className="flab" aria-hidden="true">중간 번역 간격</span>
-      <Select
-        label="중간 번역 간격"
-        width={260}
-        value={interval === null ? "off" : String(interval ?? 1500)}
-        onChange={(v) => onInterval(v === "off" ? null : Number(v))}
-        options={INTERVALS}
-      />
+      <label htmlFor={id}>{label}</label>
+      <div className="row2">
+        {before}
+        <input
+          id={id}
+          className="inp"
+          style={{ width: 120 }}
+          aria-invalid={error}
+          aria-describedby={`${id}-msg`}
+          inputMode="numeric"
+          autoComplete="off"
+          disabled={disabled}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLElement).blur()}
+        />
+        {unit && <span>{unit}</span>}
+      </div>
       <span />
-      <p className="fhint">
-        말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다. 간격이 짧을수록 요청이 많아져 요금이
-        늘어납니다.
+      <p id={`${id}-msg`} className={error ? "fhint errtext" : "fhint"} role="status">
+        {error ? `${min} 이상의 정수로 적습니다. 저장하지 않았습니다.` : hint}
       </p>
     </>
+  );
+}
+
+/** `partial_interval_ms` of a custom translation server: off (`null`) or whole ms from 0. */
+function IntervalField({ interval, onInterval }: { interval?: number | null; onInterval: (ms: number | null) => void }) {
+  const lastOn = useRef(1500);
+  if (interval != null) lastOn.current = interval;
+  const on = interval !== null;
+  return (
+    <WholeNumberField
+      id="translate-interval"
+      label="중간 번역 간격"
+      unit="ms"
+      value={lastOn.current}
+      min={0}
+      disabled={!on}
+      before={
+        <Switch checked={on} onChange={(v) => onInterval(v ? lastOn.current : null)}>
+          {on ? "켬" : "끔"}
+        </Switch>
+      }
+      hint="말하는 동안 보이는 회색 번역을 이 간격마다 한 번 요청합니다(기본값 1500). 0이면 글이 바뀔 때마다 요청합니다. 값이 작을수록 요청이 많아져 요금이 늘어납니다."
+      onCommit={onInterval}
+    />
   );
 }
 
@@ -741,6 +808,19 @@ export function SettingsTab({ active }: { active: boolean }) {
           <section className="grp" id="set-translate" aria-labelledby="h-tr">
             <h2 id="h-tr">번역</h2>
             <ProviderCard role="translate" />
+            <div className="card">
+              <div className="fld wide">
+                <WholeNumberField
+                  id="translate-context"
+                  label="번역 문맥 줄 수"
+                  unit="줄"
+                  value={settings.translate_context_lines}
+                  min={0}
+                  hint="번역할 때 앞 발화를 이 줄 수만큼 문맥으로 함께 보냅니다(기본값 4). 0이면 문맥 없이 보냅니다. 줄이 많을수록 번역이 느려지고 사용자 지정 서비스의 요금이 늘어납니다. 로컬 모델에 다 들어가지 않으면 오래된 줄부터 뺍니다."
+                  onCommit={(translate_context_lines) => app.updateSettings({ translate_context_lines })}
+                />
+              </div>
+            </div>
           </section>
 
           <section className="grp" id="set-gpu" aria-labelledby="h-gpu">
