@@ -25,6 +25,7 @@ const OFFER_STEP_MS: u64 = 700;
 /// (Windows, 4 threads, 2026-11-09):
 /// - SenseVoice Small: yes, RTF 0.024 to 0.054.
 /// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 (2 s per run at 6 s of audio).
+/// - Fun-ASR-MLT-Nano: no, RTF 0.18 to 0.37 (1.6 s per run at 6 s of audio).
 /// - Whisper: no, RTF 0.35 on the CPU (whisper.cpp): the CPU would never rest.
 /// - Custom: no, API cost.
 pub(super) fn enabled(asr: &AsrConfig) -> bool {
@@ -463,6 +464,7 @@ mod tests {
         assert!(enabled(&local(models::SENSE_VOICE_ID)));
         for id in [
             models::QWEN3_ASR_ID,
+            models::FUN_ASR_MLT_ID,
             "whisper-base",
             "whisper-small",
             "whisper-turbo",

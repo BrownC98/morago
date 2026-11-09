@@ -770,6 +770,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                   (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
                 </li>
                 <li translate="no">Qwen3-ASR 0.6B (Qwen, Alibaba Cloud): Apache License 2.0</li>
+                <li translate="no">Fun-ASR-MLT-Nano (FunAudioLLM, Alibaba Group): Apache License 2.0</li>
                 <li translate="no">Whisper (OpenAI): MIT License</li>
                 <li>
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0

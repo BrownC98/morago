@@ -87,9 +87,13 @@ pub const SENSE_VOICE_FILE: &str = "model.int8.onnx";
 pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
 /// Qwen3-ASR reads its tokenizer files from the model folder.
 pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
+pub const FUN_ASR_ENCODER_FILE: &str = "encoder_adaptor.int8.onnx";
+pub const FUN_ASR_EMBEDDING_FILE: &str = "embedding.int8.onnx";
+pub const FUN_ASR_LLM_FILE: &str = "llm.int8.onnx";
 /// Model ids by recognizer type; `speech::local` picks the config by id.
 pub const SENSE_VOICE_ID: &str = "sense-voice-small";
 pub const QWEN3_ASR_ID: &str = "qwen3-asr-0.6b";
+pub const FUN_ASR_MLT_ID: &str = "fun-asr-mlt-nano";
 pub const LLM_FILE: &str = "model.gguf";
 
 /// One file of a model: where it comes from and its name in the folder.
@@ -246,6 +250,67 @@ const SPECS: &[Spec] = &[
                 name: QWEN3_TOKENIZER_FILES[2],
                 size: 12_487,
                 sha256: "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+            },
+        ],
+    },
+    // Fun-ASR-MLT-Nano-2512 int8 (FunAudioLLM, Apache-2.0), Wasser1462 export
+    // with max_total_len 1024 (about 40 s of audio; the 512 export cuts audio
+    // after about 19.5 s). sherpa-onnx has no package of it (2026-11-09), so
+    // the files come from a personal repo, pinned to one commit. Error rates:
+    // same clips, Windows host, 2026-11-09.
+    Spec {
+        id: FUN_ASR_MLT_ID,
+        kind: ModelKind::Asr,
+        name: "Fun-ASR-MLT-Nano",
+        note: "31개 언어, 일본어 정확도 높음, 느림, 메모리 약 1.7GB. 오류율 % 한 6.4 · 일 2.9 · 중 2.9 · 영 4.3",
+        files: &[
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/encoder_adaptor.int8.onnx"
+                ),
+                name: FUN_ASR_ENCODER_FILE,
+                size: 238_277_215,
+                sha256: "a10c52d65ec0afbbf29070032bb69aafa2379684e5e95e24818bf29dbcc747d4",
+            },
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/embedding.int8.onnx"
+                ),
+                name: FUN_ASR_EMBEDDING_FILE,
+                size: 155_583_235,
+                sha256: "168a8d20117666a804db9595b01feff5643c149af0cd324745031d261526f69d",
+            },
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/llm.int8.onnx"
+                ),
+                name: FUN_ASR_LLM_FILE,
+                size: 600_025_528,
+                sha256: "1dff1090bd510c7a800771580d10e690260cfeda805c8d4a2464c521df296897",
+            },
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/tokenizer.json"
+                ),
+                name: "tokenizer.json",
+                size: 11_422_654,
+                sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+            },
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/vocab.json"
+                ),
+                name: "vocab.json",
+                size: 2_776_833,
+                sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+            },
+            FileSpec {
+                urls: hf!(
+                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/merges.txt"
+                ),
+                name: "merges.txt",
+                size: 1_671_853,
+                sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
             },
         ],
     },
@@ -576,6 +641,7 @@ mod tests {
         for id in [
             SENSE_VOICE_ID,
             QWEN3_ASR_ID,
+            FUN_ASR_MLT_ID,
             "whisper-base",
             "whisper-small",
             "whisper-medium",
@@ -605,6 +671,19 @@ mod tests {
         assert_eq!(
             qwen.size_bytes,
             44_148_281 + 182_491_662 + 755_914_231 + 2_776_833 + 1_671_853 + 12_487
+        );
+        let fun = cat.iter().find(|m| m.id == FUN_ASR_MLT_ID).unwrap();
+        assert_eq!(fun.size_bytes, 1_009_757_318);
+        // A personal repo: every URL names one commit, not a branch.
+        let fun_spec = SPECS.iter().find(|s| s.id == FUN_ASR_MLT_ID).unwrap();
+        let pinned =
+            "/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/";
+        assert!(
+            fun_spec
+                .files
+                .iter()
+                .flat_map(|f| f.urls)
+                .all(|u| u.contains(pinned))
         );
     }
 
