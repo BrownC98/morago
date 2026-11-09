@@ -10,6 +10,7 @@ runs:
       run: |
         rustup toolchain install --no-self-update
         pin=$(rustup show active-toolchain | head -n1 | cut -d' ' -f1)
+        rustup default "$pin"
         for t in $(rustup toolchain list --quiet); do
           [ "$t" = "$pin" ] || rustup toolchain uninstall "$t"
         done
