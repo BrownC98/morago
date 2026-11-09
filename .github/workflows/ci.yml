@@ -212,8 +212,13 @@ jobs:
           workspaces: src-tauri
           shared-key: bundle
           # Windows 2022 builds keep apart from the windows-latest cache (other MSVC).
-          key: ${{ runner.os == 'Windows' && 'vs2022' || '' }}
-          save-if: false
+          # llama-cpp-sys-2 does not rebuild when the CUDA architectures or the
+          # toolkit change, so their files are in the restore prefix.
+          key: ${{ runner.os == 'Windows' && format('vs2022-{0}', hashFiles('src-tauri/.cargo/config.toml', '.github/actions/cuda-toolkit/action.yml')) || '' }}
+          # The cached CUDA build of llama.cpp saves about an hour. Tag runs
+          # cannot save for the next tag (a cache stays in the ref that saved
+          # it), so manual runs save: on master for the tags.
+          save-if: ${{ runner.os == 'Windows' && github.event_name == 'workflow_dispatch' }}
       - run: pnpm install --frozen-lockfile
       # The Tauri bundler downloads NSIS from GitHub releases without a token;
       # those requests got 504 on 2026-11-08 (run 42469147077). Put the same
