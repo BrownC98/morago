@@ -1147,8 +1147,9 @@ mod tests {
     fn log_partials() {
         let _ = env_logger::builder()
             .is_test(true)
+            .format_timestamp_millis()
             .filter_module("morago_lib::engine::partial", log::LevelFilter::Info)
-            .filter_module("morago_lib::speech::funasr", log::LevelFilter::Info)
+            .filter_module("morago_lib::speech::funasr", log::LevelFilter::Debug)
             .try_init();
     }
 

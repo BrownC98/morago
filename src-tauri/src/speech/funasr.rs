@@ -202,6 +202,7 @@ impl FunAsr {
 
     fn run(&mut self, samples: &[f32]) -> anyhow::Result<transcribe_cpp::Transcript> {
         gpu::clear_llama_errors();
+        let started = Instant::now();
         let result = if self.partial {
             if self.turns.final_waits().is_some() {
                 bail!("최종 인식이 기다려서 부분 인식을 건너뜁니다");
@@ -214,7 +215,18 @@ impl FunAsr {
             result
         };
         let e = match result {
-            Ok(t) => return Ok(t),
+            Ok(t) => {
+                log::debug!(
+                    "{} run: {} ms for {} ms of audio (mel {:.0}, encoder {:.0}, decoder {:.0} ms)",
+                    if self.partial { "partial" } else { "final" },
+                    started.elapsed().as_millis(),
+                    samples.len() as u64 * 1000 / SAMPLE_RATE as u64,
+                    t.timings.mel_ms,
+                    t.timings.encode_ms,
+                    t.timings.decode_ms
+                );
+                return Ok(t);
+            }
             Err(e) => e,
         };
         // A final run stopped this partial run: no text, no error to report.
