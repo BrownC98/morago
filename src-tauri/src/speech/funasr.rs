@@ -285,8 +285,10 @@ mod tests {
 
     /// `MORAGO_TEST_BENCH=<dir>` with `<lang>/<id>.wav`: transcribes each
     /// file in the language of its folder (`MORAGO_TEST_BENCH_AUTO=1`: the
-    /// model chooses) and prints one JSON line per file and the RTF.
-    fn bench(models_dir: &Path, place: &Placement) {
+    /// model chooses) and prints one JSON line per file and the RTF. The
+    /// `partial` session runs each file too (not timed), as in a meeting, for
+    /// the lowest free GPU memory.
+    fn bench(models_dir: &Path, place: &Placement, partial: &mut FunAsr) {
         let Ok(dir) = std::env::var("MORAGO_TEST_BENCH") else {
             return;
         };
@@ -297,7 +299,7 @@ mod tests {
             .filter(|p| p.is_dir())
             .collect();
         langs.sort();
-        let (mut audio, mut took) = (0.0, 0.0);
+        let (mut audio, mut took, mut lowest) = (0.0, 0.0, free_mib(place));
         for folder in langs {
             let lang = folder.file_name().unwrap().to_str().unwrap().to_string();
             let mut asr =
@@ -317,6 +319,8 @@ mod tests {
                 let dec_s = started.elapsed().as_secs_f64();
                 took += dec_s;
                 audio += sec;
+                partial.transcribe(&seg).unwrap();
+                lowest = lowest.min(free_mib(place));
                 println!(
                     "BENCH {}",
                     serde_json::json!({
@@ -327,10 +331,9 @@ mod tests {
             }
         }
         println!(
-            "bench {}: {audio:.1} s audio, {took:.2} s, RTF {:.3}; free GPU memory {:?} MiB",
+            "bench {}: {audio:.1} s audio, {took:.2} s, RTF {:.3}; lowest free GPU memory {lowest:?} MiB",
             place.status.detail,
             took / audio,
-            free_mib(place)
         );
     }
 
@@ -386,8 +389,9 @@ mod tests {
         assert_eq!(asr.transcribe(&seg).unwrap().text, text);
         assert_eq!(partial.transcribe(&seg).unwrap().text, text);
         println!("free GPU memory after the runs: {:?} MiB", free_mib(&place));
-        drop((asr, partial));
-        bench(&models_dir, &place);
+        drop(asr);
+        bench(&models_dir, &place, &mut partial);
+        drop(partial);
 
         // Meeting language: the result carries it.
         let mut asr = FunAsr::new(&models_dir, ID, Some("en"), &place).unwrap();

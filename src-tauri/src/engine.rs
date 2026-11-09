@@ -1206,6 +1206,15 @@ mod tests {
             .try_init();
     }
 
+    /// Free memory of each GPU, MiB.
+    fn free_gpu_mib() -> Vec<usize> {
+        llama_cpp_2::list_llama_ggml_backend_devices()
+            .into_iter()
+            .filter(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
+            .map(|d| d.memory_free >> 20)
+            .collect()
+    }
+
     /// End to end without audio devices: speech clips go into the pipeline as
     /// 100 ms chunks of two sources in real time, with partials, then the
     /// saved session is read back.
@@ -1219,14 +1228,7 @@ mod tests {
         let store = SessionStore::new(root.path());
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn Sink> = recorder.clone();
-        let free = || -> Vec<usize> {
-            llama_cpp_2::list_llama_ggml_backend_devices()
-                .into_iter()
-                .filter(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu))
-                .map(|d| d.memory_free >> 20)
-                .collect()
-        };
-        let before = free();
+        let before = free_gpu_mib();
         let started = Instant::now();
         let p = start_pipeline(
             &settings,
@@ -1243,7 +1245,7 @@ mod tests {
             started.elapsed(),
             p.asr_device,
             p.translate_device,
-            free()
+            free_gpu_mib()
         );
         feed_in_real_time(&p, &e2e_chunks());
         let (summary, meta, utterances) = finish(p, root.path(), &store);
@@ -1359,13 +1361,21 @@ mod tests {
                 partials,
             )
             .unwrap();
+            println!(
+                "ASR {:?}; translation {:?}; free GPU memory {:?} MiB",
+                p.asr_device,
+                p.translate_device,
+                free_gpu_mib()
+            );
             // Fun-ASR gives partials on a GPU only.
             let on_gpu = p.asr_device.as_ref().is_some_and(|d| d.gpu);
             let partials = partials && partial::enabled(&settings.asr, on_gpu);
             let cpu = cpu_time();
             let t0 = feed_in_real_time(&p, &chunks);
+            let lowest = free_gpu_mib();
             let (_, _, utterances) = finish(p, root.path(), &store);
             let wall = t0.elapsed();
+            println!("free GPU memory at the end of the audio: {lowest:?} MiB");
             let cpu = cpu.zip(cpu_time()).map(|(a, b)| b - a);
             println!(
                 "=== partials {}: wall {wall:.1?}, CPU {cpu:.1?}, CPU/wall {}",
