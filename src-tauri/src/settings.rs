@@ -138,6 +138,9 @@ pub struct Settings {
     #[serde(deserialize_with = "context_lines_or_default")]
     pub translate_context_lines: u32,
     pub diarize: bool,
+    /// Live partial text while a person speaks (`utterance-partial`), if the
+    /// ASR allows it (`engine::partial::enabled`). Read at session start.
+    pub live_partials: bool,
     pub capture_mic: bool,
     pub capture_system: bool,
     /// `None` = default input device.
@@ -161,6 +164,7 @@ impl Default for Settings {
             },
             translate_context_lines: DEFAULT_CONTEXT_LINES,
             diarize: true,
+            live_partials: true,
             capture_mic: true,
             capture_system: true,
             mic_device: None,
@@ -273,6 +277,7 @@ mod tests {
             },
             translate_context_lines: 12,
             diarize: false,
+            live_partials: false,
             capture_mic: true,
             capture_system: false,
             mic_device: Some("USB 마이크".into()),
@@ -575,6 +580,8 @@ mod tests {
         assert_eq!(s.target_language, "ko");
         assert_eq!(s.asr, Settings::default().asr);
         assert_eq!(s.gpu, GpuSetting::Auto);
+        // A file from before the live partials setting: on.
+        assert!(s.live_partials);
     }
 
     #[test]

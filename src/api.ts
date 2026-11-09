@@ -99,6 +99,8 @@ export interface Settings {
   /** Earlier utterances sent as translation context; 0 = none. */
   translate_context_lines: number;
   diarize: boolean;
+  /** Live partial text (`utterance-partial`) while a person speaks; read at session start. */
+  live_partials: boolean;
   capture_mic: boolean;
   capture_system: boolean;
   mic_device: string | null;

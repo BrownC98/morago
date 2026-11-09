@@ -688,6 +688,7 @@ mod tests {
                 Arc::new(Mutex::new(None)),
                 Arc::new(RwLock::new("ko".into())),
                 recorder.clone(),
+                true,
             );
             let partials = recorder.partials.lock().unwrap();
             assert_eq!(partials.len(), 1);

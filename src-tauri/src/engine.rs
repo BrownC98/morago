@@ -249,6 +249,7 @@ fn start_pipeline(
     let (tr_tx, tr_rx) = backlog(BACKLOG_LIMIT_MS, utterance_ms);
 
     let mut threads = Vec::new();
+    let partials = partial_asr.is_some();
     let (feed, partial_translations) = match partial_asr {
         Some(asr) => {
             let (feed, translations, thread) = partial::start(
@@ -274,7 +275,7 @@ fn start_pipeline(
         let writer = writer.clone();
         let target = target_language.clone();
         threads.push(std::thread::spawn(move || {
-            asr_loop(seg_rx, asr, diarizer, tr_tx, writer, target, sink)
+            asr_loop(seg_rx, asr, diarizer, tr_tx, writer, target, sink, partials)
         }));
     }
     {
@@ -335,7 +336,15 @@ pub fn start(
         writer,
         translate_device,
         asr_device,
-    } = start_pipeline(settings, title, models_dir, bundled_dir, store, &sink, true)?;
+    } = start_pipeline(
+        settings,
+        title,
+        models_dir,
+        bundled_dir,
+        store,
+        &sink,
+        settings.live_partials,
+    )?;
 
     let t0 = Instant::now();
     let mut captures = Vec::new();
@@ -531,12 +540,15 @@ fn vad_loop(
         "notice",
         "인식이 밀립니다: 설정에서 더 작은 음성 인식 모델을 고르세요.",
     );
+    let partials = feed.is_some();
     let mut on_drop = |seg: SpeechSegment| {
         log::warn!(
             "ASR backlog full: dropped {} ms of speech",
             segment_ms(&seg)
         );
-        partial::clear(sink.as_ref(), &seg);
+        if partials {
+            partial::clear(sink.as_ref(), &seg);
+        }
         warning.dropped(seg.source, sink.as_ref());
     };
     let mut last_level = [Instant::now(), Instant::now()];
@@ -580,6 +592,9 @@ fn append(writer: &Mutex<Option<SessionWriter>>, u: &Utterance, sink: &dyn Sink)
     }
 }
 
+/// `partials`: the session shows live partial text, so a final without text
+/// clears its partial line.
+#[allow(clippy::too_many_arguments)]
 fn asr_loop(
     rx: BacklogRx<SpeechSegment>,
     mut asr: Box<dyn speech::Asr>,
@@ -588,7 +603,13 @@ fn asr_loop(
     writer: Arc<Mutex<Option<SessionWriter>>>,
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
+    partials: bool,
 ) {
+    let clear = |seg: &SpeechSegment| {
+        if partials {
+            partial::clear(sink.as_ref(), seg);
+        }
+    };
     let mut warning = DropWarning::new(
         "notice",
         "번역이 밀립니다: 설정에서 더 작은 번역 모델을 고르세요.",
@@ -623,13 +644,13 @@ fn asr_loop(
             }
             Err(e) => {
                 sink.error("asr", Some(seg.source), &e.to_string());
-                partial::clear(sink.as_ref(), &seg);
+                clear(&seg);
                 continue;
             }
         };
         let text = transcript.text.trim();
         if text.is_empty() {
-            partial::clear(sink.as_ref(), &seg);
+            clear(&seg);
             continue;
         }
         let speaker = match diarizer.as_mut() {
@@ -956,6 +977,7 @@ mod tests {
             Arc::new(Mutex::new(None)),
             Arc::new(RwLock::new("ko".into())),
             recorder.clone(),
+            false,
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
         assert_eq!(
@@ -964,6 +986,92 @@ mod tests {
         );
         assert_eq!(recorder.utterances.lock().unwrap().len(), 1);
         assert_eq!(tr_rx.rx.try_iter().count(), 0);
+    }
+
+    /// English text for the first three segments of `seg`, then no text, then an error.
+    struct EnglishAsr;
+
+    impl speech::Asr for EnglishAsr {
+        fn transcribe(&mut self, seg: &SpeechSegment) -> anyhow::Result<crate::types::Transcript> {
+            let text = match seg.start_ms {
+                0..3000 => format!("hello {}", seg.start_ms),
+                3000 => String::new(),
+                _ => anyhow::bail!("ASR failed"),
+            };
+            Ok(crate::types::Transcript {
+                text,
+                language: Some("en".into()),
+            })
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    struct FinalsOnly;
+
+    impl translate::Translator for FinalsOnly {
+        fn translate_partial(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &dyn Fn() -> bool,
+        ) -> anyhow::Result<String> {
+            unreachable!("live partials are off")
+        }
+        fn translate(&mut self, text: &str, _: Option<&str>, _: &str) -> anyhow::Result<String> {
+            Ok(format!("번역 {text}"))
+        }
+        fn label(&self) -> String {
+            "test".into()
+        }
+    }
+
+    #[test]
+    fn with_live_partials_off_finals_come_and_no_partial() {
+        // `start` gives `settings.live_partials` as `partials`; with it false,
+        // `start_pipeline` starts these stages without a feed or partial translations.
+        // No clear event either, for a final without text or an ASR error.
+        let (tx, rx) = backlog(60_000, segment_ms);
+        for i in 0..5 {
+            tx.push(seg(i), &mut |_| {});
+        }
+        drop(tx);
+        let (tr_tx, tr_rx) = backlog(60_000, utterance_ms);
+        let recorder = Arc::new(Recorder::default());
+        let target = Arc::new(RwLock::new("ko".to_string()));
+        asr_loop(
+            rx,
+            Box::new(EnglishAsr),
+            None,
+            tr_tx,
+            Arc::new(Mutex::new(None)),
+            target.clone(),
+            recorder.clone(),
+            false,
+        );
+        translate_loop(
+            tr_rx,
+            Box::new(FinalsOnly),
+            Arc::new(Mutex::new(None)),
+            target,
+            recorder.clone(),
+            None,
+        );
+        assert!(recorder.partials.lock().unwrap().is_empty());
+        let done: Vec<String> = recorder
+            .utterances
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|u| match &u.translation {
+                TranslationState::Done { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(done, ["번역 hello 0", "번역 hello 1000", "번역 hello 2000"]);
+        assert_eq!(*recorder.errors.lock().unwrap(), ["asr: ASR failed"]);
     }
 
     fn local_settings(asr: &str) -> Settings {
