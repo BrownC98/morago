@@ -3,6 +3,7 @@
 #   scripts/win-check.sh               the CI check job: clippy --all-targets -D warnings, cargo test
 #   scripts/win-check.sh check         cargo check
 #   scripts/win-check.sh test engine   cargo test engine (cargo arguments as given)
+#   scripts/win-check.sh run           build the app with the UI of this tree and start it on Windows
 # The work tree (also uncommitted files) goes as a commit to one fixed git
 # repository on C:. No build over \\wsl$: it is slow. The target folder is on
 # C: and all worktrees share it. One run at a time (flock). The exit code is
@@ -33,6 +34,13 @@ git -C "$repo" push -q --force "$root/repo" "$sha:refs/heads/check"
 git.exe -C "$wroot\\repo" checkout -q -f --detach check
 git.exe -C "$wroot\\repo" clean -q -ffd
 
+# The app embeds dist/ (ignored by git). Windows has no pnpm: build the UI here.
+if [ "${1:-}" = run ]; then
+  (cd "$repo" && pnpm -s build)
+  rm -rf "$root/repo/dist"
+  cp -r "$repo/dist" "$root/repo/dist"
+fi
+
 # 3. sherpa-onnx prebuilt libs: the build script downloads with no token and got
 #    504 (2026-11-08). Get the archive once through the API with the gh token and
 #    give SHERPA_ONNX_ARCHIVE_DIR (same method as .github/actions/sherpa-libs).
@@ -49,6 +57,9 @@ fi
 # 4. Run cargo on Windows. The PATH from WSL can be older than the installs, so add the tool folders.
 if [ $# -eq 0 ]; then
   steps=("cargo clippy --all-targets -- -D warnings" "cargo test")
+elif [ "$1" = run ]; then
+  # tauri/custom-protocol: the exe shows the embedded dist/, not the dev server.
+  steps=("cargo build --features tauri/custom-protocol")
 else
   steps=("cargo $*")
 fi
@@ -79,12 +90,19 @@ fi
     echo 'set CMAKE_GENERATOR=Ninja'
     echo 'set "CARGO_TARGET_DIR=%SystemDrive%\mct"'
   fi
+  # A release llama.cpp, as `pnpm tauri dev` in AGENTS.md. Its own target folder:
+  # the check runs build llama.cpp in Debug, and a change of profile rebuilds it.
+  if [ "${1:-}" = run ]; then
+    echo 'set LLAMA_LIB_PROFILE=Release'
+    echo 'set "CARGO_TARGET_DIR=%SystemDrive%\mcr"'
+  fi
   echo "cd /d \"$wroot\\repo\\src-tauri\""
   for s in "${steps[@]}"; do
     echo "echo ^> $s"
     echo "$s"
     echo 'if errorlevel 1 exit /b %errorlevel%'
   done
+  if [ "${1:-}" = run ]; then echo 'start "" "%CARGO_TARGET_DIR%\debug\morago.exe"'; fi
 } | sed 's/$/\r/' > "$root/run.cmd"
 start=$SECONDS
 cd "$root"
