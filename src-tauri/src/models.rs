@@ -233,7 +233,7 @@ const SPECS: &[Spec] = &[
         id: FUN_ASR_MLT_ID,
         kind: ModelKind::Asr,
         name: "Fun-ASR-MLT-Nano",
-        note: "31개 언어, 한국어·일본어 정확도 높음, GPU에서 빠름(실시간 자막), CPU에서 느림, 메모리 약 1.3GB. 오류율 % 한 3.2 · 일 2.0 · 중 2.6 · 영 7.0",
+        note: "31개 언어, 한국어·일본어 정확도 높음, GPU에서 빠름(실시간 자막, GPU 메모리 약 3.1GB), CPU에서는 부분 자막 없음. 오류율 % 한 3.2 · 일 2.0 · 중 2.6 · 영 7.0",
         files: &[FileSpec {
             urls: hf!(
                 "handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/08f28dadd984030331802b2f9fbd9ecac97bf834/Fun-ASR-MLT-Nano-2512-Q8_0.gguf"
