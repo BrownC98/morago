@@ -229,7 +229,7 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
     let result = blocking(move || -> anyhow::Result<String> {
         match role {
             Role::Asr => {
-                let placement = engine::place_models(&settings, &models_dir)?.asr;
+                let placement = engine::place_models(&settings)?.asr;
                 let mut asr = speech::build_asr(
                     &settings.asr,
                     settings.meeting_language.as_deref(),
@@ -247,7 +247,7 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
                 Ok(format!("{}: 연결되었습니다.", asr.label()))
             }
             Role::Translate => {
-                let placement = engine::place_models(&settings, &models_dir)?.translate;
+                let placement = engine::place_models(&settings)?.translate;
                 let mut t = translate::build_translator(
                     &settings.translate,
                     settings.translate_context_lines as usize,
@@ -466,10 +466,9 @@ pub async fn gpu_status(state: State<'_, AppState>) -> CmdResult<gpu::GpuStatus>
         Session::Running(r) => Some((r.translate_device.clone(), r.asr_device.clone())),
         _ => None,
     };
-    let models_dir = state.models_dir.clone();
     blocking(move || {
         let (translate, asr) = running.unwrap_or_else(|| {
-            let p = engine::model_devices(&settings, &models_dir);
+            let p = engine::model_devices(&settings);
             (p.translate.map(|p| p.status), p.asr.map(|p| p.status))
         });
         Ok(gpu::status(translate, asr))

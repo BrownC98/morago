@@ -349,17 +349,14 @@ mod tests {
     }
 
     /// The device follows the 자동 setting (the GPU pack from `gpu::app_dir`);
-    /// `MORAGO_TEST_GPU=off` runs on the CPU. The memory check counts the
-    /// final and the partial session, as the engine does.
-    fn placement(models_dir: &Path) -> Placement {
+    /// `MORAGO_TEST_GPU=off` runs on the CPU.
+    fn placement() -> Placement {
         gpu::init(&gpu::app_dir().unwrap());
         let setting = match std::env::var("MORAGO_TEST_GPU").as_deref() {
             Ok("off") => GpuSetting::Off,
             _ => GpuSetting::Auto,
         };
-        let file = models::path(models_dir, ID).join(models::FUN_ASR_FILE);
-        let need = gpu::funasr_memory(std::fs::metadata(file).unwrap().len(), false);
-        let p = gpu::place_beside(&setting, need, 0).unwrap();
+        let p = gpu::place(&setting).unwrap();
         println!("device: {:?}", p.status);
         p
     }
@@ -434,7 +431,7 @@ mod tests {
             .unwrap_or_else(|_| std::env::temp_dir().join("morago-test-models"));
         ensure_model(&models_dir, ID);
 
-        let place = placement(&models_dir);
+        let place = placement();
         let before = free_mib(&place);
         let started = Instant::now();
         let mut asr = FunAsr::new(&models_dir, ID, None, &place).unwrap();

@@ -10,8 +10,8 @@
 //!   takes effect after a restart.
 //! - macOS: Metal. Linux (development only): CPU.
 //!
-//! On CUDA a failed GPU allocation can abort the process (ggml `CUDA_CHECK`),
-//! so `place` checks the free GPU memory before it picks a GPU.
+//! On CUDA a failed GPU allocation can abort the process (ggml `CUDA_CHECK`).
+//! `place` does not check the free GPU memory: the user accepts that risk.
 
 use crate::models::{FileSpec, ModelKind, Spec};
 use crate::types::{DownloadProgress, GpuSetting, ModelDevice};
@@ -401,6 +401,7 @@ fn ggml_device(name: &str) -> Option<LlamaBackendDevice> {
 }
 
 /// Free memory of a ggml device now, in bytes.
+#[cfg(test)]
 pub fn free_memory(index: usize) -> Option<u64> {
     list_llama_ggml_backend_devices()
         .into_iter()
@@ -447,64 +448,6 @@ pub fn gpu_ordinal(index: usize) -> i32 {
         .count() as i32
 }
 
-/// GPU memory that the translation model of `model_bytes` needs: the weights,
-/// the small context and the CUDA buffers of the process, with a margin.
-pub fn needed_memory(model_bytes: u64) -> u64 {
-    model_bytes + model_bytes * 3 / 10 + CUDA_BUFFERS
-}
-
-const CUDA_BUFFERS: u64 = 512 * MIB;
-
-/// The encoder and decoder buffers of whisper.cpp. Measured on CUDA
-/// (2026-11-09): small 1.6 GB and turbo 2.3 GB alone, 1.3 GB and 2.1 GB
-/// next to Gemma 4 E2B.
-const WHISPER_BUFFERS: u64 = 1536 * MIB;
-
-/// GPU memory that a Whisper model of `model_bytes` needs. Next to the
-/// translation model it uses the CUDA buffers that `needed_memory` counts.
-pub fn whisper_memory(model_bytes: u64, beside_translation: bool) -> u64 {
-    let need = needed_memory(model_bytes) + WHISPER_BUFFERS;
-    if beside_translation {
-        need - CUDA_BUFFERS
-    } else {
-        need
-    }
-}
-
-/// The buffers of one Fun-ASR session of transcribe.cpp (encoder, decoder
-/// KV cache, compute) at 15 s of audio, with a margin.
-const FUN_ASR_SESSION: u64 = 512 * MIB;
-
-/// GPU memory that Fun-ASR of `model_bytes` needs: the weights once and two
-/// sessions, the final ASR and the live partials (`engine::partial`). Next to
-/// the translation model it uses the CUDA buffers that `needed_memory` counts.
-pub fn funasr_memory(model_bytes: u64, beside_translation: bool) -> u64 {
-    let need = model_bytes + 2 * FUN_ASR_SESSION + CUDA_BUFFERS;
-    if beside_translation {
-        need - CUDA_BUFFERS
-    } else {
-        need
-    }
-}
-
-/// The CPU reason when a model that needs `need` bytes does not fit in the
-/// `free` bytes of the GPU next to the translation model (`beside` bytes).
-fn memory_shortage(gpu_name: &str, free: u64, need: u64, beside: u64) -> Option<String> {
-    if free >= need + beside {
-        return None;
-    }
-    let with = if beside > 0 {
-        "번역 모델과 함께 "
-    } else {
-        ""
-    };
-    Some(format!(
-        "GPU 메모리가 모자랍니다: {gpu_name}에 남은 메모리 {}, {with}필요 {}.",
-        gb(free),
-        gb(need + beside)
-    ))
-}
-
 const MIB: u64 = 1024 * 1024;
 
 fn gb(bytes: u64) -> String {
@@ -531,19 +474,11 @@ impl Placement {
     }
 }
 
-/// `place_beside` for one translation model alone.
-#[cfg(test)]
-pub fn place(setting: &GpuSetting, model_bytes: u64) -> anyhow::Result<Placement> {
-    place_beside(setting, needed_memory(model_bytes), 0)
-}
-
-/// Picks the device for a model that needs `need` bytes (`needed_memory`,
-/// `whisper_memory`), next to the translation model of the same session that
-/// needs `beside` bytes on the same GPU, or 0. Both models are not loaded yet:
-/// the free memory must hold both. An error (the chosen GPU is not on this PC)
-/// stops the meeting start (D2 B); every other reason not to use a GPU gives
-/// the CPU and says why.
-pub fn place_beside(setting: &GpuSetting, need: u64, beside: u64) -> anyhow::Result<Placement> {
+/// Picks the device of a local model (translation, Whisper, Fun-ASR): the
+/// chosen GPU, else the CPU with the reason. No memory check: a CUDA
+/// out-of-memory error ends the process. An error (the chosen GPU is not on
+/// this PC) stops the meeting start (D2 B).
+pub fn place(setting: &GpuSetting) -> anyhow::Result<Placement> {
     let gpu = match setting {
         GpuSetting::Off => return Ok(Placement::cpu("GPU 가속을 껐습니다.")),
         GpuSetting::Auto => match gpus()
@@ -576,9 +511,6 @@ pub fn place_beside(setting: &GpuSetting, need: u64, beside: u64) -> anyhow::Res
             gpu.name, gpu.backend
         )));
     };
-    if let Some(reason) = memory_shortage(&gpu.name, dev.memory_free as u64, need, beside) {
-        return Ok(Placement::cpu(reason));
-    }
     Ok(Placement {
         gpu: Some((dev.index, gpu.name.clone())),
         status: ModelDevice {
@@ -886,7 +818,7 @@ mod tests {
 
     #[test]
     fn off_is_the_cpu_without_a_gpu_call() {
-        let p = place(&GpuSetting::Off, 1 << 30).unwrap();
+        let p = place(&GpuSetting::Off).unwrap();
         assert!(p.gpu.is_none());
         assert!(!p.status.gpu);
         assert_eq!(p.status.detail, "GPU 가속을 껐습니다.");
@@ -894,12 +826,9 @@ mod tests {
 
     #[test]
     fn a_missing_chosen_gpu_stops_the_start() {
-        let err = place(
-            &GpuSetting::Device {
-                name: "No Such GPU 9000".into(),
-            },
-            1 << 30,
-        )
+        let err = place(&GpuSetting::Device {
+            name: "No Such GPU 9000".into(),
+        })
         .unwrap_err()
         .to_string();
         assert!(err.contains("No Such GPU 9000"), "{err}");
@@ -907,59 +836,8 @@ mod tests {
     }
 
     #[test]
-    fn memory_need_has_a_margin() {
-        // Gemma 4 E2B fits an 8 GB card; 12B does not.
-        let e2b = 3_349_516_256;
-        let b12 = 6_975_879_296;
-        assert!(needed_memory(e2b) < 6 * 1024 * MIB);
-        assert!(needed_memory(b12) > 8 * 1024 * MIB);
+    fn sizes_show_in_gb() {
         assert_eq!(gb(3 * 1024 * MIB / 2), "1.5 GB");
-    }
-
-    #[test]
-    fn whisper_counts_the_translation_model_on_the_same_gpu() {
-        let gpu = "NVIDIA GeForce RTX 5060 Laptop GPU";
-        let e2b = needed_memory(3_349_516_256);
-        let turbo = 574_041_195;
-        let beside = whisper_memory(turbo, true);
-        let alone = whisper_memory(turbo, false);
-        // Measured on CUDA: 2.1 GB next to E2B, 2.3 GB alone.
-        assert!(beside > 2_150 * MIB && alone > 2_400 * MIB);
-        assert_eq!(alone - beside, CUDA_BUFFERS);
-        // The RTX 5060 Laptop GPU (8 GB) had 6.9 GB free: both fit.
-        let free_8gb = 7_033 * MIB;
-        assert_eq!(memory_shortage(gpu, free_8gb, e2b, 0), None);
-        assert_eq!(memory_shortage(gpu, free_8gb, beside, e2b), None);
-        // Translation fits alone, Whisper does not fit next to it.
-        let free = e2b + beside / 2;
-        assert_eq!(memory_shortage(gpu, free, e2b, 0), None);
-        let reason = memory_shortage(gpu, free, beside, e2b).unwrap();
-        assert!(reason.contains("번역 모델과 함께 필요"), "{reason}");
-        assert!(reason.contains(&gb(e2b + beside)), "{reason}");
-        // Translation on the CPU: Whisper has the GPU alone.
-        assert_eq!(memory_shortage(gpu, free, alone, 0), None);
-        let short = memory_shortage(gpu, alone - 1, alone, 0).unwrap();
-        assert!(!short.contains("함께"), "{short}");
-    }
-
-    #[test]
-    fn fun_asr_counts_two_sessions_and_the_translation_model() {
-        let gpu = "NVIDIA GeForce RTX 5060 Laptop GPU";
-        let e2b = needed_memory(3_349_516_256);
-        let q8 = 891_271_392;
-        let beside = funasr_memory(q8, true);
-        let alone = funasr_memory(q8, false);
-        // Measured on CUDA: one session +1241 MiB with the CUDA context.
-        assert!(alone > 1241 * MIB + FUN_ASR_SESSION);
-        assert_eq!(alone - beside, CUDA_BUFFERS);
-        // The RTX 5060 Laptop GPU (8 GB) had 6.9 GB free: both fit.
-        let free_8gb = 7_033 * MIB;
-        assert_eq!(memory_shortage(gpu, free_8gb, beside, e2b), None);
-        // Translation fits alone, Fun-ASR does not fit next to it.
-        let free = e2b + beside / 2;
-        let reason = memory_shortage(gpu, free, beside, e2b).unwrap();
-        assert!(reason.contains("번역 모델과 함께 필요"), "{reason}");
-        assert_eq!(memory_shortage(gpu, free, alone, 0), None);
     }
 
     #[test]
@@ -1056,7 +934,7 @@ mod tests {
         let dir = std::env::var_os("MORAGO_TEST_GPU_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("morago-gpu-test"));
-        let before = place(&GpuSetting::Auto, 3_349_516_256).map(|p| p.status);
+        let before = place(&GpuSetting::Auto).map(|p| p.status);
         println!("before: {before:?}");
         let last = Mutex::new(0u64);
         download_pack(

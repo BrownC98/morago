@@ -193,15 +193,13 @@ mod tests {
     /// The device follows the 자동 setting (the GPU pack from `gpu::app_dir`);
     /// `MORAGO_TEST_GPU=off` runs on the CPU. `MORAGO_TEST_BENCH=<dir>`: also
     /// transcribes every wav file in `<dir>` and prints the RTF of all of them.
-    fn placement(models_dir: &Path, id: &str) -> Placement {
+    fn placement() -> Placement {
         gpu::init(&gpu::app_dir().unwrap());
         let setting = match std::env::var("MORAGO_TEST_GPU").as_deref() {
             Ok("off") => GpuSetting::Off,
             _ => GpuSetting::Auto,
         };
-        let file = models::path(models_dir, id).join(models::WHISPER_FILE);
-        let need = gpu::whisper_memory(std::fs::metadata(file).unwrap().len(), false);
-        let p = gpu::place_beside(&setting, need, 0).unwrap();
+        let p = gpu::place(&setting).unwrap();
         println!("device: {:?}", p.status);
         p
     }
@@ -225,7 +223,7 @@ mod tests {
         let id = std::env::var("MORAGO_TEST_WHISPER").unwrap_or_else(|_| "whisper-small".into());
         ensure_model(&models_dir, &id);
 
-        let place = placement(&models_dir, &id);
+        let place = placement();
         let before = free_mib(&place);
         let started = Instant::now();
         let mut asr = WhisperAsr::new(&models_dir, &id, None, &place).unwrap();
@@ -282,7 +280,7 @@ mod tests {
         drop(asr);
 
         // Meeting language: Whisper decodes in it and the result carries it.
-        let place = placement(&models_dir, &id);
+        let place = placement();
         let mut asr = WhisperAsr::new(&models_dir, &id, Some("ja"), &place).unwrap();
         let t = asr.transcribe(&segment(read_wav(&wavs, "sv_ja"))).unwrap();
         println!("sv_ja, meeting language ja: {}", t.text);
