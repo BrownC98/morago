@@ -183,6 +183,7 @@ impl SessionStore {
             ExportFormat::Markdown => export::markdown(&meta, &utterances),
             ExportFormat::Srt => export::srt(&meta, &utterances),
             ExportFormat::Json => export::json(&meta, &utterances)?,
+            ExportFormat::Csv => export::csv(&meta, &utterances),
         })
     }
 

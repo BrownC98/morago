@@ -26,6 +26,7 @@ const EXPORTS: { format: ExportFormat; label: string; ext: string; filter: strin
   { format: "markdown", label: "Markdown", ext: "md", filter: "Markdown" },
   { format: "srt", label: "SRT 자막", ext: "srt", filter: "SRT 자막" },
   { format: "json", label: "JSON", ext: "json", filter: "JSON" },
+  { format: "csv", label: "CSV", ext: "csv", filter: "CSV" },
 ];
 
 interface Detail {

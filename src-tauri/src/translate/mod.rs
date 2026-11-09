@@ -45,14 +45,17 @@ pub trait Translator: Send {
 /// Builds the translator from settings. Local models are in `models_dir` and
 /// load on the device of `placement` (`gpu::place`; a custom endpoint ignores it).
 /// A custom endpoint reads its key with `secrets::get_key(Role::Translate, base_url)`.
+/// `context_lines`: most earlier utterances sent as context.
 pub fn build_translator(
     config: &TranslateConfig,
+    context_lines: usize,
     models_dir: &Path,
     placement: &Placement,
 ) -> anyhow::Result<Box<dyn Translator>> {
+    let history = History::new(context_lines);
     match config {
         TranslateConfig::Local { model_id } => Ok(Box::new(local::LocalTranslator::load(
-            models_dir, model_id, placement,
+            models_dir, model_id, history, placement,
         )?)),
         TranslateConfig::Custom {
             endpoint,
@@ -65,6 +68,7 @@ pub fn build_translator(
                 &endpoint.base_url,
                 key,
                 extra_body.clone(),
+                history,
             )?))
         }
     }
@@ -108,20 +112,27 @@ pub(crate) fn language_name(code: &str) -> String {
     name.to_string()
 }
 
-/// Most earlier utterances sent as context.
-const CONTEXT_LINES: usize = 4;
-/// Most characters of all context lines: a long utterance must not make each
-/// prompt slow on the CPU.
-const CONTEXT_CHARS: usize = 600;
-
 /// The last source texts of the session, for one target language.
-#[derive(Default)]
 pub(crate) struct History {
     target: String,
     lines: VecDeque<String>,
+    max: usize,
 }
 
 impl History {
+    pub(crate) fn new(max: usize) -> Self {
+        Self {
+            target: String::new(),
+            lines: VecDeque::new(),
+            max,
+        }
+    }
+
+    /// Oldest first.
+    pub(crate) fn lines(&self) -> &VecDeque<String> {
+        &self.lines
+    }
+
     /// Clears the lines when the target language changes, as a new session does.
     pub(crate) fn set_target(&mut self, target_language: &str) {
         if !self.target.eq_ignore_ascii_case(target_language) {
@@ -132,20 +143,19 @@ impl History {
 
     pub(crate) fn push(&mut self, text: &str) {
         self.lines.push_back(text.replace('\n', " "));
-        while self.lines.len() > CONTEXT_LINES
-            || self.lines.iter().map(|l| l.chars().count()).sum::<usize>() > CONTEXT_CHARS
-        {
+        while self.lines.len() > self.max {
             self.lines.pop_front();
         }
     }
 }
 
-/// System prompt for one request.
-pub(crate) fn system_prompt(
+/// System prompt for one request. `context`: earlier lines, oldest first.
+pub(crate) fn system_prompt<'a>(
     source_language: Option<&str>,
     target_language: &str,
-    history: &History,
+    context: impl IntoIterator<Item = &'a String>,
 ) -> String {
+    let mut context = context.into_iter().peekable();
     let target = language_name(target_language);
     let mut prompt = match source_language {
         Some(source) => format!(
@@ -159,11 +169,11 @@ pub(crate) fn system_prompt(
     prompt.push_str(
         " Output only the translation: no notes, no explanation, no quotation marks. Keep names, numbers and technical terms.",
     );
-    if !history.lines.is_empty() {
+    if context.peek().is_some() {
         prompt.push_str(
             "\nEarlier lines of the same meeting, only as context. Do not translate or repeat them:",
         );
-        for line in &history.lines {
+        for line in context {
             prompt.push_str("\n- ");
             prompt.push_str(line);
         }
@@ -253,7 +263,7 @@ mod tests {
                 extra_body: extra.as_object().unwrap().clone(),
                 partial_interval_ms: None,
             };
-            let err = build_translator(&config, Path::new(""), &Placement::cpu(""))
+            let err = build_translator(&config, 4, Path::new(""), &Placement::cpu(""))
                 .err()
                 .unwrap();
             assert_eq!(
@@ -296,36 +306,49 @@ mod tests {
 
     #[test]
     fn prompt_with_and_without_context() {
-        let mut history = History::default();
-        let p = system_prompt(Some("en"), "ko", &history);
+        let mut history = History::new(4);
+        let p = system_prompt(Some("en"), "ko", history.lines());
         assert!(p.contains("from English into Korean"));
         assert!(!p.contains("Earlier lines"));
         for line in ["one", "two", "three", "four", "five\nsix"] {
             history.push(line);
         }
-        let p = system_prompt(None, "ja", &history);
+        let p = system_prompt(None, "ja", history.lines());
         assert!(p.contains("into Japanese"));
         assert!(p.ends_with("- two\n- three\n- four\n- five six"), "{p}");
         assert!(!p.contains("- one"));
     }
 
     #[test]
-    fn history_keeps_the_newest_lines_within_the_char_cap() {
-        let mut history = History::default();
-        history.push("old");
-        history.push(&"가".repeat(CONTEXT_CHARS - 10));
-        history.push("0123456789");
-        assert_eq!(history.lines.len(), 2);
-        history.push("x");
-        assert_eq!(history.lines, ["0123456789", "x"]);
-        // A line longer than the cap is not sent.
-        history.push(&"a".repeat(CONTEXT_CHARS + 1));
+    fn history_keeps_the_newest_n_lines_of_any_length() {
+        for n in [1, 2, 10] {
+            let mut history = History::new(n);
+            for i in 0..15 {
+                history.push(&format!("{i} {}", "가".repeat(1000)));
+            }
+            let kept: Vec<&str> = history
+                .lines
+                .iter()
+                .map(|l| l.split(' ').next().unwrap())
+                .collect();
+            let want: Vec<String> = (15 - n..15).map(|i| i.to_string()).collect();
+            assert_eq!(kept, want);
+        }
+    }
+
+    #[test]
+    fn zero_context_lines_send_no_context_block() {
+        let mut history = History::new(0);
+        history.push("one");
         assert!(history.lines.is_empty());
+        let p = system_prompt(Some("en"), "ko", history.lines());
+        assert!(!p.contains("Earlier lines"), "{p}");
+        assert!(!p.contains("one"), "{p}");
     }
 
     #[test]
     fn history_clears_when_the_target_changes() {
-        let mut history = History::default();
+        let mut history = History::new(4);
         history.set_target("ko");
         history.push("one");
         history.set_target("KO");

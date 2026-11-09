@@ -25,7 +25,7 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `load_session` | `{ id }` | `{ meta: SessionMeta, utterances: Utterance[] }` |
 | `update_session_meta` | `{ meta: SessionMeta }` | – (title, speaker names) |
 | `delete_session` | `{ id }` | – |
-| `export_session` | `{ id, format: "markdown"\|"srt"\|"json", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
+| `export_session` | `{ id, format: "markdown"\|"srt"\|"json"\|"csv", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
 | `gpu_status` | – | `GpuStatus` (`gpu.rs`): GPU names, hint, GPU pack, device of the translation model (of the running session, else of the settings) |
 | `restart_app` | – | – (refused while a session runs; a new GPU pack is used after a restart) |
 
