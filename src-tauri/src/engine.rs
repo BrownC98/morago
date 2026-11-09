@@ -138,7 +138,11 @@ fn start_pipeline(
     };
     let asr = build_asr()?;
     let partial_asr = if partials { Some(build_asr()?) } else { None };
-    let translator = translate::build_translator(&settings.translate, models_dir)?;
+    let translator = translate::build_translator(
+        &settings.translate,
+        settings.translate_context_lines as usize,
+        models_dir,
+    )?;
     models::verify_bundled(bundled_dir)?;
     let diarizer = if settings.diarize {
         Some(Diarizer::new(bundled_dir)?)

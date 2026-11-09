@@ -43,7 +43,7 @@ export interface SessionSummary {
   speaker_count: number;
 }
 
-export type ExportFormat = "markdown" | "srt" | "json";
+export type ExportFormat = "markdown" | "srt" | "json" | "csv";
 
 export interface Endpoint {
   base_url: string;
@@ -70,6 +70,8 @@ export interface Settings {
   /** ISO 639-1 code for speech recognition; null = detect per utterance. */
   meeting_language: string | null;
   translate: ProviderConfig;
+  /** Earlier utterances sent as translation context; 0 = none. */
+  translate_context_lines: number;
   diarize: boolean;
   capture_mic: boolean;
   capture_system: boolean;
