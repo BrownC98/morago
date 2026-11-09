@@ -1,6 +1,6 @@
 //! Local translation with an embedded llama.cpp model.
 
-use super::{History, Translator, clean_output, system_prompt};
+use super::{History, Translator, clean_output, in_target_script, system_prompt};
 use crate::gpu::{self, GpuFailure, Placement};
 use anyhow::anyhow;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -59,7 +59,7 @@ impl LocalTranslator {
         if let Some((_, name)) = &placement.gpu {
             // The first run on a GPU loads its kernels and is slow: do it before the meeting.
             translator
-                .generate("Hello.", Some("en"), "ko", &|| false)
+                .generate("Hello.", Some("en"), "ko", false, &|| false)
                 .map_err(|e| gpu::load_error(name, &e.to_string()))?;
         }
         Ok(translator)
@@ -88,6 +88,7 @@ impl LocalTranslator {
         text: &str,
         source_language: Option<&str>,
         target_language: &str,
+        retry: bool,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
         let backend = gpu::llama_backend()?;
@@ -100,7 +101,8 @@ impl LocalTranslator {
         let mut line_tokens: Vec<usize> = Vec::new();
         let mut skip = 0;
         let prompt_tokens = loop {
-            let system = system_prompt(source_language, target_language, lines.range(skip..));
+            let system =
+                system_prompt(source_language, target_language, lines.range(skip..), retry);
             let tokens = vocab.tokenize(gemma4_prompt(&system, text).as_bytes(), true, true);
             let need = tokens.len() + max_new + 8;
             if need <= limit || skip == lines.len() {
@@ -163,14 +165,16 @@ impl LocalTranslator {
         target_language: &str,
         stop: &dyn Fn() -> bool,
     ) -> anyhow::Result<String> {
-        let translation = clean_output(
-            &self.generate(text, source_language, target_language, stop)?,
-            text,
-        );
-        if translation.is_empty() {
-            return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
-        }
-        Ok(translation)
+        in_target_script(target_language, |retry| {
+            let translation = clean_output(
+                &self.generate(text, source_language, target_language, retry, stop)?,
+                text,
+            );
+            if translation.is_empty() {
+                return Err(anyhow!("번역 모델이 빈 번역문을 만들었습니다"));
+            }
+            Ok(translation)
+        })
     }
 }
 

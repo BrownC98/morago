@@ -150,10 +150,12 @@ impl History {
 }
 
 /// System prompt for one request. `context`: earlier lines, oldest first.
+/// `retry`: the last answer was not in the target language (`in_target_script`).
 pub(crate) fn system_prompt<'a>(
     source_language: Option<&str>,
     target_language: &str,
     context: impl IntoIterator<Item = &'a String>,
+    retry: bool,
 ) -> String {
     let mut context = context.into_iter().peekable();
     let target = language_name(target_language);
@@ -178,7 +180,46 @@ pub(crate) fn system_prompt<'a>(
             prompt.push_str(line);
         }
     }
+    if retry {
+        prompt.push_str(&format!(
+            "\nYour last answer was not in {target}. Write the translation in {target} only. Do not copy or correct the source text."
+        ));
+    }
     prompt
+}
+
+/// True when `text` has fewer letters of the target script than of scripts
+/// that the target never uses: kana for Korean, Hangul for Japanese, both for
+/// Chinese. A few source words in brackets do not count against it. Other targets: false.
+pub(crate) fn wrong_script(text: &str, target_language: &str) -> bool {
+    let kana = |c: char| matches!(c, '\u{3040}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9F}');
+    let hangul = |c: char| matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}');
+    let han = |c: char| matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}');
+    let base = target_language.split(['-', '_']).next().unwrap_or("");
+    let (own, foreign): (&dyn Fn(char) -> bool, &dyn Fn(char) -> bool) =
+        match base.to_ascii_lowercase().as_str() {
+            "ko" => (&hangul, &kana),
+            "ja" => (&|c| kana(c) || han(c), &hangul),
+            "zh" => (&han, &|c| kana(c) || hangul(c)),
+            _ => return false,
+        };
+    let count = |f: &dyn Fn(char) -> bool| text.chars().filter(|&c| f(c)).count();
+    count(foreign) > count(own)
+}
+
+/// Runs `attempt(false)`. When its output is in a wrong script
+/// (`wrong_script`), runs `attempt(true)` once: its prompt insists on the
+/// target. Returns that second answer as it is.
+pub(crate) fn in_target_script(
+    target_language: &str,
+    mut attempt: impl FnMut(bool) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    let first = attempt(false)?;
+    if !wrong_script(&first, target_language) {
+        return Ok(first);
+    }
+    log::warn!("translation not in {target_language}, retrying once");
+    attempt(true)
 }
 
 /// Removes what chat models add around a translation: reasoning blocks,
@@ -307,16 +348,91 @@ mod tests {
     #[test]
     fn prompt_with_and_without_context() {
         let mut history = History::new(4);
-        let p = system_prompt(Some("en"), "ko", history.lines());
+        let p = system_prompt(Some("en"), "ko", history.lines(), false);
         assert!(p.contains("from English into Korean"));
         assert!(!p.contains("Earlier lines"));
         for line in ["one", "two", "three", "four", "five\nsix"] {
             history.push(line);
         }
-        let p = system_prompt(None, "ja", history.lines());
+        let p = system_prompt(None, "ja", history.lines(), false);
         assert!(p.contains("into Japanese"));
         assert!(p.ends_with("- two\n- three\n- four\n- five six"), "{p}");
         assert!(!p.contains("- one"));
+    }
+
+    #[test]
+    fn a_retry_prompt_insists_on_the_target() {
+        let p = system_prompt(Some("ja"), "ko", std::iter::empty(), true);
+        assert!(
+            p.ends_with(
+                "Write the translation in Korean only. Do not copy or correct the source text."
+            ),
+            "{p}"
+        );
+        assert!(
+            !system_prompt(Some("ja"), "ko", std::iter::empty(), false).contains("last answer")
+        );
+    }
+
+    #[test]
+    fn wrong_scripts_for_the_target() {
+        // The two answers of session 20261109-171830 (ja -> ko).
+        assert!(wrong_script(
+            "そして、敷居が甚だしく乱れていて、それで、仮に移して。",
+            "ko"
+        ));
+        assert!(wrong_script("程度の二つのところがあるわけであって", "ko"));
+        assert!(!wrong_script("그 연쇄 장치로 가열해서 재료를.", "ko"));
+        assert!(!wrong_script("田中 씨가 OK라고 했습니다.", "ko"));
+        // The katakana middle dot is punctuation that a translation keeps.
+        assert!(!wrong_script("도쿄・오사카", "ko"));
+        // A source word kept beside the translation.
+        assert!(!wrong_script(
+            "레지스트(レジスト)를 제거하고 결정화(結晶化)합니다.",
+            "ko"
+        ));
+        assert!(wrong_script("会議 내일입니다", "ja"));
+        assert!(!wrong_script("会議は明日（내일）です", "ja"));
+        assert!(!wrong_script("会議は明日です", "ja"));
+        assert!(wrong_script("ミーティング", "zh-CN"));
+        assert!(!wrong_script("会议在明天", "zh"));
+        assert!(!wrong_script("こんにちは", "en"));
+    }
+
+    #[test]
+    fn a_wrong_script_retries_once() {
+        let mut tries = Vec::new();
+        let out = in_target_script("ko", |retry| {
+            tries.push(retry);
+            Ok(if retry {
+                "안녕하세요"
+            } else {
+                "こんにちは"
+            }
+            .to_string())
+        });
+        assert_eq!(out.unwrap(), "안녕하세요");
+        assert_eq!(tries, [false, true]);
+
+        let mut n = 0;
+        let out = in_target_script("ko", |_| {
+            n += 1;
+            Ok("こんにちは".to_string())
+        });
+        // A second wrong answer is still shown.
+        assert_eq!(out.unwrap(), "こんにちは");
+        assert_eq!(n, 2);
+
+        let mut n = 0;
+        assert_eq!(
+            in_target_script("ko", |_| {
+                n += 1;
+                Ok("네".to_string())
+            })
+            .unwrap(),
+            "네"
+        );
+        assert_eq!(n, 1);
     }
 
     #[test]
@@ -341,7 +457,7 @@ mod tests {
         let mut history = History::new(0);
         history.push("one");
         assert!(history.lines.is_empty());
-        let p = system_prompt(Some("en"), "ko", history.lines());
+        let p = system_prompt(Some("en"), "ko", history.lines(), false);
         assert!(!p.contains("Earlier lines"), "{p}");
         assert!(!p.contains("one"), "{p}");
     }
