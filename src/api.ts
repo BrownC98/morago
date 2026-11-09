@@ -43,7 +43,7 @@ export interface SessionSummary {
   speaker_count: number;
 }
 
-export type ExportFormat = "markdown" | "srt" | "json";
+export type ExportFormat = "markdown" | "srt" | "json" | "csv";
 
 export interface Endpoint {
   base_url: string;

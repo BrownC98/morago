@@ -108,6 +108,7 @@ pub enum ExportFormat {
     Markdown,
     Srt,
     Json,
+    Csv,
 }
 
 /// Endpoint of an OpenAI-compatible service. The API key is not here:

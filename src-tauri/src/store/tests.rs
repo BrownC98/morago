@@ -368,6 +368,71 @@ fn export_json_golden() {
 }
 
 #[test]
+fn export_csv_golden() {
+    let (_d, store) = store();
+    export_fixture(&store);
+    let text = store.export(ID, ExportFormat::Csv).unwrap();
+    let expected = concat!(
+        "\u{feff}번호,입력,화자 ID,화자 이름,시작,종료,시작_ms,종료_ms,원문 언어,원문,번역 상태,번역 언어,번역문,번역 오류\r\n",
+        "1,시스템 소리,S1,,00:01:23.000,00:01:31.250,83000,91250,en,\"Hello\n everyone.\",완료,ko,모두 안녕하세요.,\r\n",
+        "2,시스템 소리,S2,나,01:02:03.004,01:02:05.000,3723004,3725000,ko,\"네, 시작하죠.\",같은 언어,,,\r\n",
+        "3,시스템 소리,S10,,01:02:06.000,01:02:07.500,3726000,3727500,en,One more.,실패,,,시간 초과\r\n",
+    );
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn export_csv_quotes_fields_and_guards_formulas() {
+    let (_d, store) = store();
+    let mut m = meta(ID, "2026-11-08T14:02:12+09:00");
+    m.speaker_names.insert("S1".into(), "Kim, \"Bob\"".into());
+    let mut w = store.create(&m).unwrap();
+    let mut a = utt(1, "S1", 0, 1000, TranslationState::Pending);
+    a.source = SourceKind::Mic;
+    a.language = None;
+    a.original = "=HYPERLINK(\"x\")".into();
+    w.append(&a).unwrap();
+    for (id, original) in [
+        (2, "+1"),
+        (3, "-2"),
+        (4, "@SUM(A1)"),
+        (5, "\tx"),
+        (6, "\rx"),
+        (7, "a\r\nb"),
+    ] {
+        let mut u = utt(id, "S2", 0, 1000, done("a=b"));
+        u.original = original.into();
+        w.append(&u).unwrap();
+    }
+    w.finish("2026-11-08T15:00:00+09:00").unwrap();
+
+    let text = store.export(ID, ExportFormat::Csv).unwrap();
+    let rows: Vec<&str> = text.split("\r\n").collect();
+    assert_eq!(
+        rows[1],
+        "1,마이크,S1,\"Kim, \"\"Bob\"\"\",00:00:00.000,00:00:01.000,0,1000,,\"'=HYPERLINK(\"\"x\"\")\",번역하는 중,,,"
+    );
+    let originals: Vec<&str> = rows[2..8]
+        .iter()
+        .map(|r| r.split(',').nth(9).unwrap())
+        .collect();
+    assert_eq!(
+        originals,
+        [
+            "\"'+1\"",
+            "\"'-2\"",
+            "\"'@SUM(A1)\"",
+            "\"'\tx\"",
+            "\"'\rx\"",
+            "\"a"
+        ]
+    );
+    assert_eq!(rows[8], "b\",완료,ko,a=b,");
+    assert_eq!(rows[9], "");
+    assert_eq!(rows.len(), 10);
+}
+
+#[test]
 fn export_escapes_markdown_and_keeps_speaker_names_on_one_line() {
     let (_d, store) = store();
     let mut m = meta(ID, "2026-11-08T14:02:12+09:00");
