@@ -639,6 +639,12 @@ transcribe_status run(transcribe_session *          session,
     cc->enc_host.resize(static_cast<size_t>(hp.enc_d_model) * static_cast<size_t>(T_lfr));
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
 
+    // morago patch: stop between the encoder, the prefill and each decode
+    // step too, not only before the frontend.
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
     // ---- Build adaptor graph ----
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
@@ -782,6 +788,10 @@ transcribe_status run(transcribe_session *          session,
         cc->compute_ctx = ggml_init(ip);
     }
 
+    // morago patch (see above).
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
     const bool   dumps_on   = transcribe::debug::enabled();
     const bool   slice_last = !dumps_on;
     PrefillBuild pb = build_prefill_graph(cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_prompt, T_audio, prefix_len,
@@ -919,6 +929,10 @@ transcribe_status run(transcribe_session *          session,
     int       n_steps       = 0;
     bool      repeating     = false;
     while (next_tok != eos_id && static_cast<int32_t>(generated_ids.size()) < max_new && cur_past + 1 <= max_n_kv) {
+        // morago patch (see above).
+        if (cc->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
         ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
         const int32_t pos_val = cur_past;
         ggml_backend_tensor_set(sb.position_in, &pos_val, 0, sizeof(int32_t));

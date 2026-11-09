@@ -46,8 +46,9 @@ struct Loaded {
 }
 
 /// The final runs go first. A final run stops the partial run in flight
-/// (transcribe.cpp checks the cancel token after each decode step, not in the
-/// encoder), and no partial run starts until the final runs end.
+/// (transcribe.cpp checks the cancel token before and after the encoder and
+/// before each decode step: `vendor/transcribe-cpp-sys` patch C), and no partial run
+/// starts until the final runs end.
 #[derive(Default)]
 struct Turns {
     /// Final runs that wait or run, and when the first of them came.
@@ -484,6 +485,35 @@ mod tests {
         assert_eq!(asr.transcribe(&seg).unwrap().text, text);
         assert_eq!(partial.transcribe(&seg).unwrap().text, text);
         println!("free GPU memory after the runs: {:?} MiB", free_mib(&place));
+
+        // A final that comes in the middle of a partial run stops it in the
+        // decoder: the native run ends as aborted, before its normal end.
+        partial.set_partial();
+        let started = Instant::now();
+        partial.transcribe(&seg).unwrap();
+        let normal = started.elapsed();
+        let turns = partial.turns.clone();
+        let samples = seg.samples.clone();
+        let run = std::thread::spawn(move || {
+            let started = Instant::now();
+            let failed = partial.run(&samples).is_err();
+            (partial, failed, started.elapsed())
+        });
+        std::thread::sleep(normal / 2);
+        turns.final_starts();
+        let (back, failed, took) = run.join().unwrap();
+        turns.final_ends();
+        let mut partial = back;
+        println!("partial run: {normal:?} in full, stopped after {took:?}");
+        assert!(
+            failed && partial.session.was_aborted(),
+            "the partial run was not stopped"
+        );
+        assert!(
+            took < normal * 3 / 4,
+            "stopped after {took:?} of {normal:?}"
+        );
+        assert_eq!(partial.transcribe(&seg).unwrap().text, text);
         drop(asr);
         let gpu = place.gpu.as_ref().map(|(i, _)| *i);
         let ((), lowest) = gpu::lowest_free_while(gpu, || bench(&models_dir, &place, &mut partial));
