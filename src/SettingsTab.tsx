@@ -834,7 +834,8 @@ export function SettingsTab({ active }: { active: boolean }) {
               </Switch>
               <span className="fhint" id="live-partials-hint">
                 말하는 동안 인식 중인 글과 번역을 회색 줄로 먼저 보입니다. 끄면 말이 끝난 뒤에 글과 번역만 보이고 CPU·GPU를
-                덜 씁니다. 다음 회의부터 적용합니다.
+                덜 씁니다. 다음 회의부터 적용합니다. 로컬 SenseVoice Small과 GPU에서 도는 Fun-ASR-MLT-Nano만 회색 줄을
+                보입니다.
               </span>
             </div>
           </section>
@@ -935,9 +936,13 @@ export function SettingsTab({ active }: { active: boolean }) {
                   (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
                 </li>
                 <li translate="no">Qwen3-ASR 0.6B (Qwen, Alibaba Cloud): Apache License 2.0</li>
-                <li translate="no">Fun-ASR-MLT-Nano (FunAudioLLM, Alibaba Group): Apache License 2.0</li>
+                <li translate="no">
+                  Fun-ASR-MLT-Nano (FunAudioLLM, Alibaba Group): FunASR Model License 1.1
+                  (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). GGUF conversion by handy-computer
+                </li>
                 <li translate="no">Whisper (OpenAI): MIT License</li>
                 <li translate="no">whisper.cpp, ggml (The ggml authors): MIT License</li>
+                <li translate="no">transcribe.cpp (handy-computer): MIT License</li>
                 <li>
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0
                   (https://ai.google.dev/gemma/docs/gemma_4_license). 모델 파일은 Google의 Hugging Face 저장소에서 바꾸지 않고 내려받습니다.
