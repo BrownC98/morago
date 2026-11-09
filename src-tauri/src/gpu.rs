@@ -1,6 +1,6 @@
-//! GPU use for the local models: translation (llama.cpp) and Whisper
-//! (whisper.cpp). Both run on the one ggml of llama.cpp, so they share its
-//! GPU backend, the pack and this placement.
+//! GPU use for the local models: translation (llama.cpp), Whisper
+//! (whisper.cpp) and Fun-ASR (transcribe.cpp). All run on the one ggml of
+//! llama.cpp, so they share its GPU backend, the pack and this placement.
 //! - Windows: CUDA on NVIDIA GPUs. The CUDA runtime DLLs are not in the
 //!   installer: the "GPU 구성 요소" pack downloads them from NVIDIA on demand
 //!   (`download_pack`). build.rs delay-loads them, so the app starts and runs
@@ -207,15 +207,21 @@ unsafe extern "C" {
 }
 
 /// llama.cpp allows one backend per process. The log of llama.cpp,
-/// whisper.cpp and ggml goes to `log`; the last error lines give the cause of
-/// a failure (`failure_cause`). Call it before the first Whisper context.
+/// whisper.cpp, transcribe.cpp and ggml goes to `log`; the last error lines
+/// give the cause of a failure (`failure_cause`). Call it before the first
+/// Whisper context or Fun-ASR model.
 pub fn llama_backend() -> anyhow::Result<&'static LlamaBackend> {
     static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
     BACKEND
         .get_or_init(|| {
             let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-            // SAFETY: `on_log` is a valid callback for the life of the process.
+            // SAFETY: the callbacks are valid for the life of the process.
+            // transcribe_log_set also sets the ggml log: the others come after it.
             unsafe {
+                transcribe_cpp::sys::transcribe_log_set(
+                    Some(on_transcribe_log),
+                    std::ptr::null_mut(),
+                );
                 llama_cpp_sys_2::llama_log_set(Some(on_log), std::ptr::null_mut());
                 whisper_log_set(Some(on_log), std::ptr::null_mut());
             }
@@ -232,22 +238,46 @@ unsafe extern "C" fn on_log(
     text: *const c_char,
     _: *mut c_void,
 ) {
+    let level = match level {
+        llama_cpp_sys_2::GGML_LOG_LEVEL_ERROR => log::Level::Error,
+        llama_cpp_sys_2::GGML_LOG_LEVEL_WARN => log::Level::Warn,
+        _ => return,
+    };
+    // SAFETY: llama.cpp passes a NUL-terminated string.
+    unsafe { keep_log(level, text) }
+}
+
+unsafe extern "C" fn on_transcribe_log(
+    level: transcribe_cpp::sys::transcribe_log_level,
+    text: *const c_char,
+    _: *mut c_void,
+) {
+    use transcribe_cpp::sys::transcribe_log_level as L;
+    let level = match level {
+        L::TRANSCRIBE_LOG_LEVEL_ERROR => log::Level::Error,
+        L::TRANSCRIBE_LOG_LEVEL_WARN => log::Level::Warn,
+        _ => return,
+    };
+    // SAFETY: transcribe.cpp passes a NUL-terminated string.
+    unsafe { keep_log(level, text) }
+}
+
+/// SAFETY: `text` is null or a NUL-terminated string.
+unsafe fn keep_log(level: log::Level, text: *const c_char) {
     if text.is_null() {
         return;
     }
-    // SAFETY: llama.cpp passes a NUL-terminated string.
+    // SAFETY: see the function.
     let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
     let text = text.trim();
-    if level == llama_cpp_sys_2::GGML_LOG_LEVEL_ERROR {
-        log::error!("ggml: {text}");
-        if let Ok(mut errors) = LLAMA_ERRORS.lock() {
-            if errors.len() >= 8 {
-                errors.remove(0);
-            }
-            errors.push(text.to_string());
+    log::log!(level, "ggml: {text}");
+    if level == log::Level::Error
+        && let Ok(mut errors) = LLAMA_ERRORS.lock()
+    {
+        if errors.len() >= 8 {
+            errors.remove(0);
         }
-    } else if level == llama_cpp_sys_2::GGML_LOG_LEVEL_WARN {
-        log::warn!("ggml: {text}");
+        errors.push(text.to_string());
     }
 }
 
@@ -409,6 +439,22 @@ const WHISPER_BUFFERS: u64 = 1536 * MIB;
 /// translation model it uses the CUDA buffers that `needed_memory` counts.
 pub fn whisper_memory(model_bytes: u64, beside_translation: bool) -> u64 {
     let need = needed_memory(model_bytes) + WHISPER_BUFFERS;
+    if beside_translation {
+        need - CUDA_BUFFERS
+    } else {
+        need
+    }
+}
+
+/// The buffers of one Fun-ASR session of transcribe.cpp (encoder, decoder
+/// KV cache, compute) at 15 s of audio, with a margin.
+const FUN_ASR_SESSION: u64 = 512 * MIB;
+
+/// GPU memory that Fun-ASR of `model_bytes` needs: the weights once and two
+/// sessions, the final ASR and the live partials (`engine::partial`). Next to
+/// the translation model it uses the CUDA buffers that `needed_memory` counts.
+pub fn funasr_memory(model_bytes: u64, beside_translation: bool) -> u64 {
+    let need = model_bytes + 2 * FUN_ASR_SESSION + CUDA_BUFFERS;
     if beside_translation {
         need - CUDA_BUFFERS
     } else {
@@ -869,6 +915,26 @@ mod tests {
         assert_eq!(memory_shortage(gpu, free, alone, 0), None);
         let short = memory_shortage(gpu, alone - 1, alone, 0).unwrap();
         assert!(!short.contains("함께"), "{short}");
+    }
+
+    #[test]
+    fn fun_asr_counts_two_sessions_and_the_translation_model() {
+        let gpu = "NVIDIA GeForce RTX 5060 Laptop GPU";
+        let e2b = needed_memory(3_349_516_256);
+        let q8 = 891_271_392;
+        let beside = funasr_memory(q8, true);
+        let alone = funasr_memory(q8, false);
+        // Measured on CUDA: one session +1241 MiB with the CUDA context.
+        assert!(alone > 1241 * MIB + FUN_ASR_SESSION);
+        assert_eq!(alone - beside, CUDA_BUFFERS);
+        // The RTX 5060 Laptop GPU (8 GB) had 6.9 GB free: both fit.
+        let free_8gb = 7_033 * MIB;
+        assert_eq!(memory_shortage(gpu, free_8gb, beside, e2b), None);
+        // Translation fits alone, Fun-ASR does not fit next to it.
+        let free = e2b + beside / 2;
+        let reason = memory_shortage(gpu, free, beside, e2b).unwrap();
+        assert!(reason.contains("번역 모델과 함께 필요"), "{reason}");
+        assert_eq!(memory_shortage(gpu, free, alone, 0), None);
     }
 
     #[test]

@@ -152,7 +152,8 @@ pub struct Placements {
 }
 
 /// The local models share the GPU. The translation model gets it first (the
-/// GPU makes it 4-8x faster); Whisper gets it if both fit, else the CPU.
+/// GPU makes it 4-8x faster); Whisper or Fun-ASR gets it if both fit, else
+/// the CPU.
 fn place_with(
     settings: &Settings,
     models_dir: &Path,
@@ -173,6 +174,10 @@ fn place_with(
         AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
             let bytes = model_bytes(models_dir, model_id, models::WHISPER_FILE);
             Some(place(gpu::whisper_memory(bytes, beside > 0), beside)?)
+        }
+        AsrConfig::Local { model_id } if model_id == models::FUN_ASR_MLT_ID => {
+            let bytes = model_bytes(models_dir, model_id, models::FUN_ASR_FILE);
+            Some(place(gpu::funasr_memory(bytes, beside > 0), beside)?)
         }
         AsrConfig::Local { .. } => Some(Placement::cpu("이 모델은 CPU에서만 돌립니다.")),
         AsrConfig::Custom { .. } => None,
@@ -200,7 +205,8 @@ pub fn model_devices(settings: &Settings, models_dir: &Path) -> Placements {
 }
 
 /// Loads the models, creates the session file and starts the stage threads.
-/// `partials`: run a second ASR for live partial text (`partial::enabled`).
+/// `partials`: run a second ASR for live partial text if the model and its
+/// device allow it (`partial::enabled`).
 fn start_pipeline(
     settings: &Settings,
     title: Option<String>,
@@ -223,10 +229,12 @@ fn start_pipeline(
             placement,
         )
     };
-    let asr = build_asr(asr_placement.as_ref().unwrap_or(&cpu()))?;
-    // On the CPU: the GPU memory check counts one Whisper model only.
-    let partial_asr = if partials {
-        Some(build_asr(&cpu())?)
+    let asr_place = asr_placement.clone().unwrap_or_else(cpu);
+    let asr = build_asr(&asr_place)?;
+    // On the device of the final ASR: Fun-ASR on a GPU opens a second session
+    // of its model, which `gpu::funasr_memory` counts.
+    let partial_asr = if partials && partial::enabled(&settings.asr, asr_place.gpu.is_some()) {
+        Some(build_asr(&asr_place)?)
     } else {
         None
     };
@@ -356,15 +364,7 @@ pub fn start(
         writer,
         translate_device,
         asr_device,
-    } = start_pipeline(
-        settings,
-        title,
-        models_dir,
-        bundled_dir,
-        store,
-        &sink,
-        partial::enabled(&settings.asr),
-    )?;
+    } = start_pipeline(settings, title, models_dir, bundled_dir, store, &sink, true)?;
 
     let t0 = Instant::now();
     let mut captures = Vec::new();
@@ -1007,10 +1007,10 @@ mod tests {
         }
     }
 
-    /// The VRAM sum rule: Whisper is placed with the memory that the
+    /// The VRAM sum rule: Whisper or Fun-ASR is placed with the memory that the
     /// translation model takes on the GPU, and only when that model is on it.
     #[test]
-    fn whisper_is_placed_beside_the_translation_model() {
+    fn whisper_and_fun_asr_are_placed_beside_the_translation_model() {
         let dir = tempfile::tempdir().unwrap();
         let catalog = |id: &str| {
             models::catalog()
@@ -1020,13 +1020,14 @@ mod tests {
                 .size_bytes
         };
         let gemma = gpu::needed_memory(catalog("gemma-4-e2b-it-q4"));
-        let turbo = catalog("whisper-turbo");
-        for translate_on_gpu in [true, false] {
-            let calls = Mutex::new(Vec::new());
-            let p = place_with(
-                &local_settings("whisper-turbo"),
-                dir.path(),
-                &|need, beside| {
+        for id in ["whisper-turbo", models::FUN_ASR_MLT_ID] {
+            let memory = match id {
+                "whisper-turbo" => gpu::whisper_memory,
+                _ => gpu::funasr_memory,
+            };
+            for translate_on_gpu in [true, false] {
+                let calls = Mutex::new(Vec::new());
+                let p = place_with(&local_settings(id), dir.path(), &|need, beside| {
                     calls.lock().unwrap().push((need, beside));
                     Ok(if translate_on_gpu || need != gemma {
                         Placement {
@@ -1039,16 +1040,16 @@ mod tests {
                     } else {
                         Placement::cpu("GPU 메모리가 모자랍니다")
                     })
-                },
-            )
-            .unwrap();
-            let whisper = (
-                gpu::whisper_memory(turbo, translate_on_gpu),
-                if translate_on_gpu { gemma } else { 0 },
-            );
-            assert_eq!(*calls.lock().unwrap(), [(gemma, 0), whisper]);
-            assert_eq!(p.translate.unwrap().status.gpu, translate_on_gpu);
-            assert!(p.asr.unwrap().status.gpu);
+                })
+                .unwrap();
+                let asr = (
+                    memory(catalog(id), translate_on_gpu),
+                    if translate_on_gpu { gemma } else { 0 },
+                );
+                assert_eq!(*calls.lock().unwrap(), [(gemma, 0), asr], "{id}");
+                assert_eq!(p.translate.unwrap().status.gpu, translate_on_gpu);
+                assert!(p.asr.unwrap().status.gpu, "{id}");
+            }
         }
     }
 
@@ -1231,7 +1232,7 @@ mod tests {
             &bundled_dir(),
             &store,
             &sink,
-            partial::enabled(&settings.asr),
+            true,
         )
         .unwrap();
         println!(

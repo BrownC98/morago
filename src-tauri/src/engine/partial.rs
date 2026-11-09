@@ -21,16 +21,22 @@ use std::time::{Duration, Instant};
 /// Audio time between two partial ASR runs of one speech.
 const OFFER_STEP_MS: u64 = 700;
 
-/// True when the ASR is fast enough on the CPU to transcribe the growing
-/// audio of each speech again every 0.7 s. RTF on 1 to 15 s of audio
-/// (Windows, 4 threads, 2026-11-09):
-/// - SenseVoice Small: yes, RTF 0.024 to 0.054.
-/// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 (2 s per run at 6 s of audio).
-/// - Fun-ASR-MLT-Nano: no, RTF 0.18 to 0.37 (1.6 s per run at 6 s of audio).
+/// True when the ASR is fast enough to transcribe the growing audio of each
+/// speech again every 0.7 s. `on_gpu`: its placement is a GPU. RTF on 1 to
+/// 15 s of audio (Windows, 4 threads, RTX 5060 Laptop, 2026-11-09):
+/// - SenseVoice Small: yes, RTF 0.024 to 0.054 on the CPU.
+/// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 on the CPU (2 s per run at 6 s of audio).
+/// - Fun-ASR-MLT-Nano: on a GPU only. 10 s of audio: 0.32 to 0.41 s on CUDA,
+///   1.8 to 2.2 s on the CPU.
 /// - Whisper: no, RTF 0.35 on the CPU (whisper.cpp): the CPU would never rest.
 /// - Custom: no, API cost.
-pub(super) fn enabled(asr: &AsrConfig) -> bool {
-    matches!(asr, AsrConfig::Local { model_id } if model_id == models::SENSE_VOICE_ID)
+pub(super) fn enabled(asr: &AsrConfig, on_gpu: bool) -> bool {
+    match asr {
+        AsrConfig::Local { model_id } => {
+            model_id == models::SENSE_VOICE_ID || (on_gpu && model_id == models::FUN_ASR_MLT_ID)
+        }
+        AsrConfig::Custom { .. } => false,
+    }
 }
 
 /// Least time between two partial translation requests of one speech;
@@ -471,19 +477,22 @@ mod tests {
     }
 
     #[test]
-    fn only_sense_voice_gives_partials() {
+    fn sense_voice_and_fun_asr_on_a_gpu_give_partials() {
         let local = |id: &str| AsrConfig::Local {
             model_id: id.into(),
         };
-        assert!(enabled(&local(models::SENSE_VOICE_ID)));
+        assert!(enabled(&local(models::SENSE_VOICE_ID), false));
+        assert!(enabled(&local(models::FUN_ASR_MLT_ID), true));
+        assert!(!enabled(&local(models::FUN_ASR_MLT_ID), false));
         for id in [
             models::QWEN3_ASR_ID,
-            models::FUN_ASR_MLT_ID,
             "whisper-base",
             "whisper-small",
             "whisper-turbo",
         ] {
-            assert!(!enabled(&local(id)), "{id}");
+            for on_gpu in [false, true] {
+                assert!(!enabled(&local(id), on_gpu), "{id}");
+            }
         }
         let custom = AsrConfig::Custom {
             endpoint: crate::types::Endpoint {
@@ -491,7 +500,7 @@ mod tests {
                 model: "whisper-1".into(),
             },
         };
-        assert!(!enabled(&custom));
+        assert!(!enabled(&custom, false));
     }
 
     #[test]
