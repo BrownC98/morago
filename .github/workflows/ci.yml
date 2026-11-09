@@ -158,11 +158,13 @@ jobs:
           # A cache stays in the ref that saved it: branch copies only push
           # the master caches out of the 10 GB repository limit.
           save-if: ${{ github.ref_name == 'master' }}
+      # The model files are the same on both OSes: one 4.4 GB copy, not two.
       - uses: actions/cache/restore@v4
         id: models
         with:
           path: e2e/models
           key: e2e-models-v4
+          enableCrossOsArchive: true
       - name: Test speech clips (sherpa-onnx model test files)
         shell: bash
         run: |
@@ -190,6 +192,7 @@ jobs:
         with:
           path: e2e/models
           key: e2e-models-v4
+          enableCrossOsArchive: true
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs with job=bundle.
   bundle:
