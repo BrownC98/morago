@@ -1,0 +1,29 @@
+[package]
+name = "transcribe-cpp-sys"
+version = "0.4.1"
+edition = "2021"
+rust-version = "1.74"
+description = "Native FFI bindings for transcribe.cpp, built on the ggml of llama-cpp-sys-2"
+license = "MIT"
+repository = "https://github.com/handy-computer/transcribe.cpp"
+links = "transcribe"
+publish = false
+
+# transcribe-cpp forwards these features; the fork ignores them
+# (llama-cpp-2 features select the ggml backends).
+[features]
+default = []
+metal = []
+vulkan = []
+cuda = []
+rocm = []
+openmp = []
+shared = []
+dynamic-backends = ["shared"]
+
+[dependencies]
+# ggml comes from llama-cpp-sys-2 (DEP_LLAMA_GGML_CMAKE_DIR); transcribe.cpp is built against it.
+llama-cpp-sys-2 = { version = "=0.1.161", default-features = false }
+
+[build-dependencies]
+cmake = "0.1"

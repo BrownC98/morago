@@ -87,9 +87,8 @@ pub const SENSE_VOICE_FILE: &str = "model.int8.onnx";
 pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
 /// Qwen3-ASR reads its tokenizer files from the model folder.
 pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
-pub const FUN_ASR_ENCODER_FILE: &str = "encoder_adaptor.int8.onnx";
-pub const FUN_ASR_EMBEDDING_FILE: &str = "embedding.int8.onnx";
-pub const FUN_ASR_LLM_FILE: &str = "llm.int8.onnx";
+/// transcribe.cpp model (GGUF).
+pub const FUN_ASR_FILE: &str = "model.gguf";
 /// whisper.cpp model (ggml).
 pub const WHISPER_FILE: &str = "model.bin";
 /// Model ids by recognizer type; `speech` picks the recognizer by id.
@@ -225,66 +224,24 @@ const SPECS: &[Spec] = &[
             },
         ],
     },
-    // Fun-ASR-MLT-Nano-2512 int8 (FunAudioLLM, Apache-2.0), Wasser1462 export
-    // with max_total_len 1024 (about 40 s of audio; the 512 export cuts audio
-    // after about 19.5 s). sherpa-onnx has no package of it (2026-11-09), so
-    // the files come from a personal repo, pinned to one commit. Error rates:
-    // same clips, Windows host, 2026-11-09.
+    // Fun-ASR-MLT-Nano-2512 (FunAudioLLM) in the transcribe.cpp GGUF format,
+    // Q8_0, by handy-computer: FunASR Model License 1.1. Pinned to one commit
+    // of the repo. The id is that of the earlier sherpa-onnx files: settings
+    // keep the model, and a new download replaces the old folder. Error rates:
+    // 80 clips, CUDA, Windows host, 2026-11-09.
     Spec {
         id: FUN_ASR_MLT_ID,
         kind: ModelKind::Asr,
         name: "Fun-ASR-MLT-Nano",
-        note: "31개 언어, 일본어 정확도 높음, 느림, 메모리 약 1.7GB. 오류율 % 한 6.4 · 일 2.9 · 중 2.9 · 영 4.3",
-        files: &[
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/encoder_adaptor.int8.onnx"
-                ),
-                name: FUN_ASR_ENCODER_FILE,
-                size: 238_277_215,
-                sha256: "a10c52d65ec0afbbf29070032bb69aafa2379684e5e95e24818bf29dbcc747d4",
-            },
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/embedding.int8.onnx"
-                ),
-                name: FUN_ASR_EMBEDDING_FILE,
-                size: 155_583_235,
-                sha256: "168a8d20117666a804db9595b01feff5643c149af0cd324745031d261526f69d",
-            },
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/llm.int8.onnx"
-                ),
-                name: FUN_ASR_LLM_FILE,
-                size: 600_025_528,
-                sha256: "1dff1090bd510c7a800771580d10e690260cfeda805c8d4a2464c521df296897",
-            },
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/tokenizer.json"
-                ),
-                name: "tokenizer.json",
-                size: 11_422_654,
-                sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
-            },
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/vocab.json"
-                ),
-                name: "vocab.json",
-                size: 2_776_833,
-                sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
-            },
-            FileSpec {
-                urls: hf!(
-                    "luigi000/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/tokenizer/merges.txt"
-                ),
-                name: "merges.txt",
-                size: 1_671_853,
-                sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
-            },
-        ],
+        note: "31개 언어, 한국어·일본어 정확도 높음, GPU에서 빠름(실시간 자막, GPU 메모리 약 3.1GB), CPU에서는 부분 자막 없음. 오류율 % 한 3.2 · 일 2.0 · 중 2.6 · 영 7.0",
+        files: &[FileSpec {
+            urls: hf!(
+                "handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/08f28dadd984030331802b2f9fbd9ecac97bf834/Fun-ASR-MLT-Nano-2512-Q8_0.gguf"
+            ),
+            name: FUN_ASR_FILE,
+            size: 891_271_392,
+            sha256: "419d350b220d5a1d398740ec1511c8ea751517f2157043a73a399b76b60f21e4",
+        }],
     },
     // Whisper (OpenAI, MIT) in the whisper.cpp ggml format (ggerganov/whisper.cpp,
     // MIT). The ids are those of the earlier sherpa-onnx files: settings keep
@@ -404,7 +361,7 @@ fn spec_installed(models_dir: &Path, spec: &Spec) -> bool {
 }
 
 /// The folder of the model exists: installed, incomplete, or the files of an
-/// older format (sherpa-onnx Whisper before 2026-11-09).
+/// older format (sherpa-onnx Whisper and Fun-ASR before 2026-11-09).
 pub fn on_disk(models_dir: &Path, id: &str) -> bool {
     path(models_dir, id).exists()
 }
@@ -668,19 +625,14 @@ mod tests {
             qwen.size_bytes,
             44_148_281 + 182_491_662 + 755_914_231 + 2_776_833 + 1_671_853 + 12_487
         );
-        let fun = cat.iter().find(|m| m.id == FUN_ASR_MLT_ID).unwrap();
-        assert_eq!(fun.size_bytes, 1_009_757_318);
-        // A personal repo: every URL names one commit, not a branch.
+        // Fun-ASR: one transcribe.cpp GGUF, every URL names one commit, not a branch.
         let fun_spec = SPECS.iter().find(|s| s.id == FUN_ASR_MLT_ID).unwrap();
+        assert_eq!(fun_spec.files.len(), 1);
+        assert_eq!(fun_spec.files[0].name, FUN_ASR_FILE);
+        assert_eq!(fun_spec.files[0].size, 891_271_392);
         let pinned =
-            "/fun-asr-mlt-nano-onnx-int8-1024/resolve/39334e8a32d91f46d47f80d96d749409c86a56b1/";
-        assert!(
-            fun_spec
-                .files
-                .iter()
-                .flat_map(|f| f.urls)
-                .all(|u| u.contains(pinned))
-        );
+            "/Fun-ASR-MLT-Nano-2512-gguf/resolve/08f28dadd984030331802b2f9fbd9ecac97bf834/";
+        assert!(fun_spec.files[0].urls.iter().all(|u| u.contains(pinned)));
     }
 
     #[test]
@@ -809,6 +761,29 @@ mod tests {
         assert!(on_disk(&dir, "whisper-small"));
         assert!(!is_installed(&dir, "whisper-small"));
         assert!(!on_disk(&dir, "whisper-base"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_format_fun_asr_folder_is_on_disk_but_not_installed() {
+        let dir = temp_dir("old-fun");
+        // The sherpa-onnx files of before 2026-11-09.
+        let old = path(&dir, FUN_ASR_MLT_ID);
+        std::fs::create_dir_all(&old).unwrap();
+        for f in [
+            "encoder_adaptor.int8.onnx",
+            "embedding.int8.onnx",
+            "llm.int8.onnx",
+            "tokenizer.json",
+            "vocab.json",
+            "merges.txt",
+        ] {
+            std::fs::write(old.join(f), b"old").unwrap();
+        }
+        assert!(on_disk(&dir, FUN_ASR_MLT_ID));
+        assert!(!is_installed(&dir, FUN_ASR_MLT_ID));
+        std::fs::write(old.join(FUN_ASR_FILE), b"new").unwrap();
+        assert!(is_installed(&dir, FUN_ASR_MLT_ID));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
