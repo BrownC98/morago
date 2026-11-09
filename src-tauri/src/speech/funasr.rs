@@ -11,7 +11,10 @@ use crate::types::{SAMPLE_RATE, SpeechSegment, Transcript};
 use anyhow::{anyhow, bail};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
-use transcribe_cpp::{Backend, Itn, Model, ModelOptions, RunOptions, Session, SessionOptions};
+use std::time::Instant;
+use transcribe_cpp::{
+    Backend, CancelToken, Itn, Model, ModelOptions, RunOptions, Session, SessionOptions,
+};
 
 const MODEL: &str = "음성 인식 모델";
 
@@ -19,6 +22,9 @@ pub struct FunAsr {
     session: Session,
     /// Keeps the model of `LOADED` alive.
     _model: Arc<Model>,
+    turns: Arc<Turns>,
+    /// The live partial ASR (`Asr::set_partial`).
+    partial: bool,
     options: RunOptions,
     /// Meeting language (ISO 639-1); `None` = the model chooses.
     language: Option<String>,
@@ -29,13 +35,50 @@ pub struct FunAsr {
 
 /// The loaded model. A second `FunAsr` on the same device (the partial ASR of
 /// the engine) opens a session on it, so the weights are in memory once.
-/// transcribe.cpp runs one compute per model at a time: the runs of the two
-/// sessions take turns.
+/// transcribe.cpp runs one compute per model at a time: the runs of the
+/// sessions take `Turns`.
 struct Loaded {
     file: PathBuf,
     /// ggml device index; `None` = CPU.
     device: Option<usize>,
     model: Weak<Model>,
+    turns: Arc<Turns>,
+}
+
+/// The final runs go first. A final run stops the partial run in flight
+/// (transcribe.cpp checks the cancel token after each decode step, not in the
+/// encoder), and no partial run starts until the final runs end.
+#[derive(Default)]
+struct Turns {
+    /// Final runs that wait or run, and when the first of them came.
+    finals: Mutex<(usize, Option<Instant>)>,
+    /// The cancel token of the partial sessions.
+    cancel: CancelToken,
+}
+
+impl Turns {
+    fn final_starts(&self) {
+        let mut f = self.finals.lock().expect("turns lock");
+        if f.0 == 0 {
+            f.1 = Some(Instant::now());
+        }
+        f.0 += 1;
+        self.cancel.cancel();
+    }
+
+    fn final_ends(&self) {
+        let mut f = self.finals.lock().expect("turns lock");
+        f.0 -= 1;
+        if f.0 == 0 {
+            f.1 = None;
+            self.cancel.reset();
+        }
+    }
+
+    /// When the waiting final came; `None`: no final waits.
+    fn final_waits(&self) -> Option<Instant> {
+        self.finals.lock().expect("turns lock").1
+    }
 }
 
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
@@ -61,7 +104,7 @@ fn backend(kind: &str) -> Backend {
     }
 }
 
-fn load(file: &Path, placement: &Placement) -> anyhow::Result<Arc<Model>> {
+fn load(file: &Path, placement: &Placement) -> anyhow::Result<(Arc<Model>, Arc<Turns>)> {
     let device = placement.gpu.as_ref().map(|(index, _)| *index);
     let mut loaded = LOADED.lock().expect("loaded lock");
     if let Some(l) = loaded.as_ref()
@@ -69,7 +112,7 @@ fn load(file: &Path, placement: &Placement) -> anyhow::Result<Arc<Model>> {
         && l.device == device
         && let Some(model) = l.model.upgrade()
     {
-        return Ok(model);
+        return Ok((model, l.turns.clone()));
     }
     let options = match device {
         None => ModelOptions {
@@ -89,12 +132,14 @@ fn load(file: &Path, placement: &Placement) -> anyhow::Result<Arc<Model>> {
         }
     };
     let model = Arc::new(Model::load_with(file, &options)?);
+    let turns = Arc::new(Turns::default());
     *loaded = Some(Loaded {
         file: file.to_path_buf(),
         device,
         model: Arc::downgrade(&model),
+        turns: turns.clone(),
     });
-    Ok(model)
+    Ok((model, turns))
 }
 
 impl FunAsr {
@@ -114,14 +159,14 @@ impl FunAsr {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().min(4))
             .unwrap_or(2) as i32;
-        let opened = load(&file, placement).and_then(|model| {
+        let opened = load(&file, placement).and_then(|(model, turns)| {
             let session = model.session_with(&SessionOptions {
                 n_threads: threads,
                 ..SessionOptions::default()
             })?;
-            Ok((model, session))
+            Ok((model, turns, session))
         });
-        let (model, session) = match (opened, &placement.gpu) {
+        let (model, turns, session) = match (opened, &placement.gpu) {
             (Ok(opened), _) => opened,
             (Err(e), Some((_, name))) => {
                 return Err(gpu::model_load_error(MODEL, name, &gpu::failure_cause(&e)));
@@ -139,6 +184,8 @@ impl FunAsr {
         let mut asr = Self {
             session,
             _model: model,
+            turns,
+            partial: false,
             options: run_options(language),
             language: language.map(str::to_string),
             label: format!("로컬 {}", info.name),
@@ -155,10 +202,31 @@ impl FunAsr {
 
     fn run(&mut self, samples: &[f32]) -> anyhow::Result<transcribe_cpp::Transcript> {
         gpu::clear_llama_errors();
-        let e = match self.session.run(samples, &self.options) {
+        let result = if self.partial {
+            if self.turns.final_waits().is_some() {
+                bail!("최종 인식이 기다려서 부분 인식을 건너뜁니다");
+            }
+            self.session.run(samples, &self.options)
+        } else {
+            self.turns.final_starts();
+            let result = self.session.run(samples, &self.options);
+            self.turns.final_ends();
+            result
+        };
+        let e = match result {
             Ok(t) => return Ok(t),
             Err(e) => e,
         };
+        // A final run stopped this partial run: no text, no error to report.
+        if self.partial && self.session.was_aborted() {
+            if let Some(came) = self.turns.final_waits() {
+                log::info!(
+                    "partial run stopped {} ms after a final came",
+                    came.elapsed().as_millis()
+                );
+            }
+            bail!("최종 인식 때문에 부분 인식을 멈췄습니다");
+        }
         // The decode stopped at its token budget or at a repetition: the text before it.
         if let Some(t) = e.partial() {
             return Ok(t.clone());
@@ -190,6 +258,11 @@ impl Asr for FunAsr {
     fn label(&self) -> String {
         self.label.clone()
     }
+
+    fn set_partial(&mut self) {
+        self.session.set_cancel_token(&self.turns.cancel);
+        self.partial = true;
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +291,21 @@ mod tests {
         assert_eq!(run_options(None).language, None);
         assert_eq!(backend("cuda"), Backend::Cuda);
         assert_eq!(backend("metal"), Backend::Metal);
+    }
+
+    #[test]
+    fn a_final_run_stops_partial_runs_until_all_finals_end() {
+        let t = Turns::default();
+        assert!(t.final_waits().is_none() && !t.cancel.is_cancelled());
+        t.final_starts();
+        let came = t.final_waits().unwrap();
+        assert!(t.cancel.is_cancelled());
+        t.final_starts();
+        t.final_ends();
+        assert_eq!(t.final_waits(), Some(came));
+        assert!(t.cancel.is_cancelled());
+        t.final_ends();
+        assert!(t.final_waits().is_none() && !t.cancel.is_cancelled());
     }
 
     /// Settings that name Fun-ASR with only the earlier sherpa-onnx files on

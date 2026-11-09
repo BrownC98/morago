@@ -27,6 +27,9 @@ pub trait Asr: Send {
     fn transcribe(&mut self, segment: &SpeechSegment) -> anyhow::Result<Transcript>;
     /// Label for the UI and session meta, for example "로컬 SenseVoice Small".
     fn label(&self) -> String;
+    /// Makes this instance the live partial ASR (`engine::partial`). A model
+    /// that shares its compute with the final ASR then gives way to final runs.
+    fn set_partial(&mut self) {}
 }
 
 /// Builds the ASR from settings. Local models are in `models_dir`.

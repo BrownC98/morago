@@ -1198,11 +1198,13 @@ mod tests {
         (summary, meta, utterances)
     }
 
-    /// Prints the partial translation lag lines of `engine::partial`.
+    /// Prints the partial translation lag lines of `engine::partial` and the
+    /// stopped partial runs of `speech::funasr`.
     fn log_partials() {
         let _ = env_logger::builder()
             .is_test(true)
             .filter_module("morago_lib::engine::partial", log::LevelFilter::Info)
+            .filter_module("morago_lib::speech::funasr", log::LevelFilter::Info)
             .try_init();
     }
 

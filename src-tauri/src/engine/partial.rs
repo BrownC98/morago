@@ -219,12 +219,13 @@ impl Slot {
 /// Starts the partial ASR thread. Returns the side for `vad_loop`, the side
 /// for `translate_loop` (`None` when partial translation is off) and the thread.
 pub(super) fn start(
-    asr: Box<dyn speech::Asr>,
+    mut asr: Box<dyn speech::Asr>,
     translate: &TranslateConfig,
     local_on_gpu: bool,
     target: Arc<RwLock<String>>,
     sink: Arc<dyn Sink>,
 ) -> (Feed, Option<Translations>, JoinHandle<()>) {
+    asr.set_partial();
     let live = Arc::new(Live::default());
     let (jobs, jobs_rx) = bounded(0);
     let translations = translate_interval(translate, local_on_gpu)
