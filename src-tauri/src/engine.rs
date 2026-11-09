@@ -1111,12 +1111,15 @@ mod tests {
 
     /// `MORAGO_TEST_ASR` (default SenseVoice Small) and Gemma 4 E2B,
     /// installed. The devices follow the 자동 setting (the GPU pack from
-    /// `gpu::app_dir`).
+    /// `gpu::app_dir`); `MORAGO_TEST_GPU=off` runs both on the CPU.
     fn e2e_settings(models_dir: &Path) -> Settings {
         gpu::init(&gpu::app_dir().unwrap());
         let asr =
             std::env::var("MORAGO_TEST_ASR").unwrap_or_else(|_| models::SENSE_VOICE_ID.into());
-        let settings = local_settings(&asr);
+        let mut settings = local_settings(&asr);
+        if std::env::var("MORAGO_TEST_GPU").is_ok_and(|v| v == "off") {
+            settings.gpu = GpuSetting::Off;
+        }
         for id in required_models(&settings) {
             ensure_model(models_dir, &id);
         }
