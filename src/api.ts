@@ -70,6 +70,8 @@ export interface Settings {
   /** ISO 639-1 code for speech recognition; null = detect per utterance. */
   meeting_language: string | null;
   translate: ProviderConfig;
+  /** Earlier utterances sent as translation context, 1 or more. */
+  translate_context_lines: number;
   diarize: boolean;
   capture_mic: boolean;
   capture_system: boolean;

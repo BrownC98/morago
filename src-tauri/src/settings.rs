@@ -132,6 +132,11 @@ pub struct Settings {
     /// it and gives it as the utterance language.
     pub meeting_language: Option<String>,
     pub translate: TranslateConfig,
+    /// Most earlier utterances that both translators send as context (from 1,
+    /// default 4). The local model leaves out the oldest lines that do not
+    /// fit its context.
+    #[serde(deserialize_with = "context_lines_or_default")]
+    pub translate_context_lines: u32,
     pub diarize: bool,
     pub capture_mic: bool,
     pub capture_system: bool,
@@ -153,6 +158,7 @@ impl Default for Settings {
             translate: TranslateConfig::Local {
                 model_id: "gemma-4-e2b-it-q4".into(),
             },
+            translate_context_lines: DEFAULT_CONTEXT_LINES,
             diarize: true,
             capture_mic: true,
             capture_system: true,
@@ -160,6 +166,21 @@ impl Default for Settings {
             sessions_dir: None,
         }
     }
+}
+
+const DEFAULT_CONTEXT_LINES: u32 = 4;
+
+/// A hand-edited value that is not an integer from 1 in `u32` gets the
+/// default, not the whole file.
+fn context_lines_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    Ok(Value::deserialize(d)?
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or_else(|| {
+            log::warn!("settings file: translate_context_lines is not a whole number from 1; used the default");
+            DEFAULT_CONTEXT_LINES
+        }))
 }
 
 /// Reads settings; a missing file gives the defaults. A corrupt file is kept
@@ -247,6 +268,7 @@ mod tests {
             translate: TranslateConfig::Local {
                 model_id: "m".into(),
             },
+            translate_context_lines: 12,
             diarize: false,
             capture_mic: true,
             capture_system: false,
@@ -338,6 +360,28 @@ mod tests {
             "extra_body": extra_body,
             "partial_interval_ms": 1500,
         })
+    }
+
+    #[test]
+    fn context_lines_default_to_4_for_old_and_bad_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(Settings::default().translate_context_lines, 4);
+        for (field, want) in [
+            ("", 4),
+            (r#","translate_context_lines":1"#, 1),
+            (r#","translate_context_lines":4294967295"#, u32::MAX),
+            (r#","translate_context_lines":0"#, 4),
+            (r#","translate_context_lines":-3"#, 4),
+            (r#","translate_context_lines":2.5"#, 4),
+            (r#","translate_context_lines":"8""#, 4),
+            (r#","translate_context_lines":null"#, 4),
+        ] {
+            std::fs::write(&path, format!(r#"{{"theme":"dark"{field}}}"#)).unwrap();
+            let s = load(&path).unwrap();
+            assert_eq!(s.translate_context_lines, want, "{field}");
+            assert_eq!(s.theme, Theme::Dark, "{field}");
+        }
     }
 
     #[test]

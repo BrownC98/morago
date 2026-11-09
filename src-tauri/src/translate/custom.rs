@@ -109,6 +109,7 @@ impl CustomTranslator {
         base_url: &str,
         key: Option<Secret>,
         mut extra_body: Map<String, Value>,
+        history: History,
     ) -> anyhow::Result<Self> {
         let model = required_model(&extra_body)?.to_string();
         extra_body.remove("model");
@@ -123,7 +124,7 @@ impl CustomTranslator {
             url,
             key,
             client,
-            history: History::default(),
+            history,
             extra_body,
             refused: Vec::new(),
             notice: None,
@@ -137,7 +138,7 @@ impl CustomTranslator {
         body.insert(
             "messages".into(),
             json!([
-                {"role": "system", "content": system_prompt(source, target, &self.history)},
+                {"role": "system", "content": system_prompt(source, target, self.history.lines())},
                 {"role": "user", "content": text},
             ]),
         );
@@ -445,7 +446,13 @@ mod tests {
     fn translator_with(base_url: String, key: Option<&str>, extra_body: Value) -> CustomTranslator {
         let mut extra = json!({"model": "gpt-test"}).as_object().unwrap().clone();
         extra.extend(extra_body.as_object().unwrap().clone());
-        CustomTranslator::new(&base_url, key.map(|k| Secret::new(k.into())), extra).unwrap()
+        CustomTranslator::new(
+            &base_url,
+            key.map(|k| Secret::new(k.into())),
+            extra,
+            History::new(4),
+        )
+        .unwrap()
     }
 
     fn notice_for(key: &str) -> String {
@@ -521,6 +528,19 @@ mod tests {
                 .unwrap()
                 .contains("- one")
         );
+    }
+
+    #[test]
+    fn the_request_has_the_newest_n_context_lines() {
+        let mut t = translator("http://127.0.0.1:9".into(), None);
+        t.history = History::new(2);
+        for line in ["one", "two", "three"] {
+            t.history.push(line);
+        }
+        let body = t.request_body("four", Some("en"), "ko");
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(system.ends_with("\n- two\n- three"), "{system}");
+        assert!(!system.contains("- one"), "{system}");
     }
 
     #[test]

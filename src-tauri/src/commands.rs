@@ -239,7 +239,11 @@ pub async fn test_provider(state: State<'_, AppState>, role: Role) -> CmdResult<
                 Ok(format!("{}: 연결되었습니다.", asr.label()))
             }
             Role::Translate => {
-                let mut t = translate::build_translator(&settings.translate, &models_dir)?;
+                let mut t = translate::build_translator(
+                    &settings.translate,
+                    settings.translate_context_lines as usize,
+                    &models_dir,
+                )?;
                 let out = t.translate("Hello.", Some("en"), &settings.target_language)?;
                 Ok(format!("{}: 연결되었습니다. 시험 번역: {out}", t.label()))
             }
