@@ -241,8 +241,13 @@ function KeyField({ role, baseUrl }: { role: KeyRole; baseUrl: string }) {
 
 type ExtraBody = Record<string, unknown>;
 
+/** `extra_body` of a new custom translation server. */
+const DEFAULT_EXTRA_BODY: ExtraBody = { model: "gpt-5-mini", reasoning_effort: "low" };
+
+const isEmpty = (body?: ExtraBody) => !body || Object.keys(body).length === 0;
+
 /** Text of a saved `extra_body`: blank for an empty object. */
-const extraBodyText = (body?: ExtraBody) => (body && Object.keys(body).length > 0 ? JSON.stringify(body, null, 2) : "");
+const extraBodyText = (body?: ExtraBody) => (isEmpty(body) ? "" : JSON.stringify(body, null, 2));
 
 /** `extra_body` of a custom translation server as JSON text. The core checks it, live and on save. */
 function ExtraBodyField({
@@ -307,7 +312,6 @@ function ExtraBodyField({
           className="inp mono"
           value={text}
           rows={5}
-          placeholder={'{\n  "model": "gpt-5-mini",\n  "reasoning_effort": "low"\n}'}
           spellCheck={false}
           autoComplete="off"
           translate="no"
@@ -548,7 +552,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
       ? {
           kind: "custom",
           endpoint,
-          ...(extra && Object.keys(extra).length > 0 ? { extra_body: extra } : {}),
+          ...(isEmpty(extra) ? {} : { extra_body: extra }),
           partial_interval_ms: interval,
         }
       : { kind: "custom", endpoint };
@@ -559,7 +563,12 @@ function ProviderCard({ role }: { role: KeyRole }) {
         label={role === "asr" ? "음성 인식 방법" : "번역 방법"}
         value={cfg.kind}
         onChange={(k) => {
-          if (k === "custom") set(custom(lastEndpoint.current, lastExtra.current, lastInterval.current));
+          if (k === "custom") {
+            const extra = isEmpty(lastExtra.current) ? DEFAULT_EXTRA_BODY : lastExtra.current;
+            // A draft that is not the saved body would hide the default.
+            if (extra === DEFAULT_EXTRA_BODY) extraText.current = null;
+            set(custom(lastEndpoint.current, extra, lastInterval.current));
+          }
           else set({ kind: "local", model_id: lastLocal.current ?? list.find((m) => m.installed)?.id ?? list[0]?.id ?? "" });
         }}
         options={[
