@@ -1,0 +1,17 @@
+name: Rust toolchain (rust-toolchain.toml)
+description: >
+  Installs the pinned toolchain of rust-toolchain.toml and removes the other
+  toolchains of the runner image. rust-cache hashes the version of each
+  installed toolchain, so a new stable on the image would change the cache key.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        rustup toolchain install --no-self-update
+        pin=$(rustup show active-toolchain | head -n1 | cut -d' ' -f1)
+        rustup default "$pin"
+        for t in $(rustup toolchain list --quiet); do
+          [ "$t" = "$pin" ] || rustup toolchain uninstall "$t"
+        done
+        rustup toolchain list
