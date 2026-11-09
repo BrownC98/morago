@@ -1,6 +1,6 @@
 //! Local ASR: sherpa-onnx offline recognizers (int8): SenseVoice Small,
-//! Qwen3-ASR and Whisper. Each detects the language per segment, or uses the
-//! meeting language of the settings.
+//! Qwen3-ASR, Fun-ASR-MLT-Nano and Whisper. Each detects the language per
+//! segment, or uses the meeting language of the settings.
 //!
 //! The safe `sherpa-onnx` crate drops the detected language from the result,
 //! so this file calls the C API through `sherpa-onnx-sys` and reads `lang`
@@ -95,6 +95,17 @@ fn config(model_id: &str, dir: &Path, language: Option<&str>) -> anyhow::Result<
                 stream_language = Some(text(&crate::translate::language_name(code))?);
             }
         }
+        models::FUN_ASR_MLT_ID => {
+            m.funasr_nano.encoder_adaptor = keep(file(models::FUN_ASR_ENCODER_FILE)?);
+            m.funasr_nano.embedding = keep(file(models::FUN_ASR_EMBEDDING_FILE)?);
+            m.funasr_nano.llm = keep(file(models::FUN_ASR_LLM_FILE)?);
+            // Folder with tokenizer.json, vocab.json, merges.txt.
+            m.funasr_nano.tokenizer = keep(c_path(dir)?);
+            m.funasr_nano.max_new_tokens = 256;
+            // 0 means off here, not "default".
+            m.funasr_nano.itn = 1;
+            m.funasr_nano.language = keep(text(fun_asr_language(code))?);
+        }
         _ => {
             m.whisper.encoder = keep(file(models::ENCODER_FILE)?);
             m.whisper.decoder = keep(file(models::DECODER_FILE)?);
@@ -111,6 +122,18 @@ fn config(model_id: &str, dir: &Path, language: Option<&str>) -> anyhow::Result<
         _strings: strings,
         stream_language,
     })
+}
+
+/// Fun-ASR puts the language name into its Chinese prompt ("语音转写成韩文"):
+/// the names of the model card, not English ones. "" = detect.
+fn fun_asr_language(code: &str) -> &'static str {
+    match code {
+        "ko" => "韩文",
+        "ja" => "日文",
+        "zh" => "中文",
+        "en" => "英文",
+        _ => "",
+    }
 }
 
 impl LocalAsr {
@@ -198,7 +221,7 @@ impl Asr for LocalAsr {
 }
 
 /// Parses the result JSON; `lang` is "en" or "<|en|>" (Whisper, SenseVoice).
-/// Qwen3-ASR leaves `lang` empty: then the script of the text decides.
+/// Qwen3-ASR and Fun-ASR leave `lang` empty: then the script of the text decides.
 fn parse_result(json: &str) -> anyhow::Result<Transcript> {
     let raw: RawResult =
         serde_json::from_str(json).context("음성 인식 결과를 해석하지 못했습니다")?;
@@ -278,6 +301,23 @@ mod tests {
                 q.stream_language.as_ref().map(|s| s.to_str().unwrap()),
                 name
             );
+        }
+        for (language, name) in [
+            (Some("ko"), "韩文"),
+            (Some("ja"), "日文"),
+            (Some("zh"), "中文"),
+            (Some("en"), "英文"),
+            (None, ""),
+        ] {
+            let f = config(models::FUN_ASR_MLT_ID, dir, language).unwrap();
+            let n = &f.raw.model_config.funasr_nano;
+            assert_eq!(c(n.language), name);
+            assert!(c(n.encoder_adaptor).ends_with("encoder_adaptor.int8.onnx"));
+            assert!(c(n.embedding).ends_with("embedding.int8.onnx"));
+            assert!(c(n.llm).ends_with("llm.int8.onnx"));
+            assert_eq!(c(n.tokenizer), c_path(dir).unwrap().to_str().unwrap());
+            assert_eq!(n.itn, 1);
+            assert!(f.stream_language.is_none());
         }
     }
 

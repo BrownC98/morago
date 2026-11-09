@@ -463,6 +463,7 @@ mod tests {
         assert!(enabled(&local(models::SENSE_VOICE_ID)));
         for id in [
             models::QWEN3_ASR_ID,
+            models::FUN_ASR_MLT_ID,
             "whisper-base",
             "whisper-small",
             "whisper-turbo",
