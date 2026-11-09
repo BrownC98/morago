@@ -1356,6 +1356,9 @@ mod tests {
                 partials,
             )
             .unwrap();
+            // Fun-ASR gives partials on a GPU only.
+            let on_gpu = p.asr_device.as_ref().is_some_and(|d| d.gpu);
+            let partials = partials && partial::enabled(&settings.asr, on_gpu);
             let cpu = cpu_time();
             let t0 = feed_in_real_time(&p, &chunks);
             let (_, _, utterances) = finish(p, root.path(), &store);
@@ -1428,6 +1431,8 @@ mod tests {
                 assert!(mine.iter().all(|(t, _)| *t <= first), "{mine:?}");
                 if partials {
                     assert!(!texts.is_empty(), "no partial for {}", u.original);
+                } else {
+                    assert!(mine.is_empty(), "{mine:?}");
                 }
             }
             assert!(recorder.errors.lock().unwrap().is_empty());
