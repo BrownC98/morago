@@ -68,9 +68,15 @@ pub fn run() {
 fn update_test(app: tauri::AppHandle) {
     use std::io::Write;
     use tauri_plugin_updater::UpdaterExt;
-    let Some(path) = std::env::var_os("MORAGO_UPDATE_TEST") else { return };
+    let Some(path) = std::env::var_os("MORAGO_UPDATE_TEST") else {
+        return;
+    };
     let log = move |line: String| {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             let _ = writeln!(f, "{line}");
         }
     };
@@ -81,7 +87,10 @@ fn update_test(app: tauri::AppHandle) {
         };
         match update {
             Ok(Some(update)) => {
-                log(format!("found {} (current {})", update.version, update.current_version));
+                log(format!(
+                    "found {} (current {})",
+                    update.version, update.current_version
+                ));
                 // On Windows the installer starts here and this process ends.
                 match update.download_and_install(|_, _| {}, || {}).await {
                     Ok(()) => {
