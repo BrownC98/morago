@@ -31,7 +31,8 @@ srv=$!
 
 # Install the old build as a user does.
 if [ $os = win ]; then
-  "$(ls "$bundle"/nsis/*_0.0.1_*-setup.exe)" /S || note "old installer failed"
+  # //S: Git Bash changes /S to a path, and NSIS then opens its wizard.
+  timeout 120 "$(ls "$bundle"/nsis/*_0.0.1_*-setup.exe)" //S || note "old installer failed"
   exe="$LOCALAPPDATA/morago/morago.exe"
   version() { powershell -NoProfile -Command "(Get-Item '$(cygpath -w "$exe")').VersionInfo.ProductVersion"; }
   running() { tasklist //FI "IMAGENAME eq morago.exe" | grep -qi morago.exe; }

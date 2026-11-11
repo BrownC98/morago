@@ -274,6 +274,7 @@ jobs:
         run: pnpm tauri build --bundles ${{ matrix.old }} --features update-test --config "$PWD/scripts/update-test.conf.json"
       - name: Update test
         shell: bash
+        timeout-minutes: 15
         run: scripts/update-test.sh release-files
       - uses: actions/upload-artifact@v4
         with:
