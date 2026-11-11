@@ -297,8 +297,11 @@ jobs:
           merge-multiple: true
       - name: Updater manifest
         run: |
+          v=v$(jq -r .version src-tauri/tauri.conf.json)
           tag=${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          [ -n "$tag" ] || tag=v$(jq -r .version src-tauri/tauri.conf.json)
+          # Else installed apps install the same build again at each start.
+          [ -z "$tag" ] || [ "$tag" = "$v" ] || { echo "::error::tag $tag is not the app version $v"; exit 1; }
+          tag=$v
           scripts/release-manifest.sh release-files "$GITHUB_REPOSITORY" "$tag" > release-files/latest.json
           cat release-files/latest.json
       - uses: actions/upload-artifact@v4

@@ -156,7 +156,7 @@ export function LiveTab({ active }: { active: boolean }) {
             <button
               type="button"
               className="ab primary"
-              disabled={app.starting || missing.length > 0 || (!settings.capture_mic && !(sysOk && settings.capture_system))}
+              disabled={app.starting || app.update.kind === "installing" || missing.length > 0 || (!settings.capture_mic && !(sysOk && settings.capture_system))}
               onClick={() => void app.startSession()}
             >
               <Icon name="play" />
@@ -168,6 +168,9 @@ export function LiveTab({ active }: { active: boolean }) {
           <p id="sys-reason" className="ctl-note">
             시스템 소리를 받을 수 없습니다. {systemAudio?.reason}
           </p>
+        )}
+        {!running && app.update.kind === "installing" && (
+          <p className="ctl-note">업데이트를 설치하는 중에는 회의를 시작할 수 없습니다.</p>
         )}
         {!running && !settings.capture_mic && !(sysOk && settings.capture_system) && (
           <p className="ctl-note">마이크나 시스템 소리 중 하나는 켜야 시작할 수 있습니다.</p>

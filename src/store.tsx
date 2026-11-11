@@ -191,6 +191,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
   const [updateToast, setUpdateToast] = useState(false);
   const updateRef = useRef<AppUpdate | null>(null);
+  // On Windows the updater ends the process when the download ends: no meeting may start before that.
+  const installingRef = useRef(false);
   const saveChain = useRef<Promise<boolean>>(Promise.resolve(true));
   const settingsRef = useRef<Settings | null>(null);
 
@@ -362,6 +364,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const startSession = useCallback(async () => {
+    if (installingRef.current) return;
     setStarting(true);
     // Clear first: the core can send utterances before the command returns.
     setUtterances([]);
@@ -414,10 +417,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const u = updateRef.current;
     if (!u) return;
     const { version } = u;
-    if (running) {
+    if (running || starting) {
       setUpdate({ kind: "available", version, blocked: true });
       return;
     }
+    installingRef.current = true;
     setUpdate({ kind: "installing", version, pct: null });
     let total = 0;
     let done = 0;
@@ -435,10 +439,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Windows: the installer ends this process before here. macOS: start the new bundle.
       await api.restartApp();
     } catch (e) {
+      installingRef.current = false;
       setUpdate({ kind: "available", version, blocked: false });
       notify("error", errText(e));
     }
-  }, [running, notify]);
+  }, [running, starting, notify]);
 
   const dismissUpdateToast = useCallback(() => setUpdateToast(false), []);
 
