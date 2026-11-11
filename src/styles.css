@@ -175,6 +175,8 @@ input.inp:disabled { cursor: not-allowed; opacity: 0.6; }
 .inp::placeholder { color: var(--a-ink-3); opacity: 1; }
 .fhint { font-size: 12px; color: var(--a-ink-3); }
 .fhint.errtext { color: var(--a-err); }
+.fhint.ink { color: var(--a-ink); }
+.ver { font: 600 13px var(--mono); }
 .row2 { display: flex; gap: 8px; align-items: center; }
 .row2.end { justify-content: flex-end; }
 .row2 .grow, .grow { flex: 1; min-width: 0; }
@@ -182,7 +184,8 @@ input.inp:disabled { cursor: not-allowed; opacity: 0.6; }
 .feed > .notice { max-width: 1040px; margin-bottom: 8px; }
 .notice .ab { flex: none; }
 
-.toast { position: fixed; right: 16px; bottom: 46px; z-index: 10; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); padding: 10px 10px 10px 14px; border-radius: 8px; border: 1px solid var(--a-line-2); background: var(--a-surface); box-shadow: 0 4px 16px var(--a-shadow); font-size: 13px; }
+.toasts { position: fixed; right: 16px; bottom: 46px; z-index: 10; display: grid; justify-items: end; gap: 8px; }
+.toast { display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); padding: 10px 10px 10px 14px; border-radius: 8px; border: 1px solid var(--a-line-2); background: var(--a-surface); box-shadow: 0 4px 16px var(--a-shadow); font-size: 13px; }
 .toast[data-kind="error"] { border-color: var(--a-err); }
 .toast[data-kind="error"] > span:first-child { color: var(--a-err); }
 .toast > span:first-child { flex: 1; overflow-wrap: anywhere; }
