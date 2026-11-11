@@ -259,25 +259,26 @@ jobs:
       - name: Keep the release files
         shell: bash
         run: |
-          mkdir dist; b=src-tauri/target/release/bundle
-          cp $b/nsis/*-setup.exe* $b/dmg/*.dmg $b/macos/*.app.tar.gz* dist/ 2>/dev/null || true
-          ls -l dist
+          # Not dist/: the UI build writes there.
+          mkdir release-files; b=src-tauri/target/release/bundle
+          cp $b/nsis/*-setup.exe* $b/dmg/*.dmg $b/macos/*.app.tar.gz* release-files/ 2>/dev/null || true
+          ls -l release-files
       # The v0.4.1 dmg had only the linker's signature, and macOS called the
       # downloaded app "damaged" (run 42974938339).
       - name: Launch check of the dmg
         if: runner.os == 'macOS'
-        run: scripts/mac-launch-check.sh dist/*.dmg
+        run: scripts/mac-launch-check.sh release-files/*.dmg
       # An old build (0.0.1) installs the new files above through the updater.
       - name: Build an old version for the update test
         shell: bash
         run: pnpm tauri build --bundles ${{ matrix.old }} --features update-test --config "$PWD/scripts/update-test.conf.json"
       - name: Update test
         shell: bash
-        run: scripts/update-test.sh dist
+        run: scripts/update-test.sh release-files
       - uses: actions/upload-artifact@v4
         with:
           name: morago-${{ matrix.os }}
-          path: dist/*
+          path: release-files/*
           if-no-files-found: error
 
   # Release files and the updater manifest. On a tag: the GitHub release.
@@ -291,18 +292,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: morago-*
-          path: dist
+          path: release-files
           merge-multiple: true
       - name: Updater manifest
         run: |
           tag=${{ github.ref_type == 'tag' && github.ref_name || '' }}
           [ -n "$tag" ] || tag=v$(jq -r .version src-tauri/tauri.conf.json)
-          scripts/release-manifest.sh dist "$GITHUB_REPOSITORY" "$tag" > dist/latest.json
-          cat dist/latest.json
+          scripts/release-manifest.sh release-files "$GITHUB_REPOSITORY" "$tag" > release-files/latest.json
+          cat release-files/latest.json
       - uses: actions/upload-artifact@v4
         with:
           name: latest-json
-          path: dist/latest.json
+          path: release-files/latest.json
       # The release notes stay with the person who releases: gh release edit.
       - name: GitHub release
         if: github.ref_type == 'tag'
@@ -311,4 +312,4 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "morago ${TAG#v}" --notes ""
-          gh release upload "$TAG" --clobber dist/*-setup.exe dist/*.dmg dist/*.app.tar.gz dist/latest.json
+          gh release upload "$TAG" --clobber release-files/*-setup.exe release-files/*.dmg release-files/*.app.tar.gz release-files/latest.json
