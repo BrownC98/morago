@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 
 export type SourceKind = "mic" | "system";
 
@@ -150,8 +151,16 @@ export interface EventMap {
   "model-download-done": { modelId: string; error: string | null };
 }
 
+/** The part of the updater plugin's `Update` that the UI uses (the mock gives a fake one). */
+export interface AppUpdate {
+  version: string;
+  downloadAndInstall(onEvent?: (e: DownloadEvent) => void): Promise<void>;
+}
+
 export interface MockBackend {
   invoke(cmd: string, args: Record<string, unknown>): Promise<unknown>;
+  checkUpdate(): Promise<AppUpdate | null>;
+  version: string;
   listen(event: string, cb: (payload: unknown) => void): () => void;
   save(defaultPath: string): string | null;
 }
@@ -193,6 +202,20 @@ export async function pickSavePath(
   if (mockPromise) return (await mockPromise).save(defaultPath);
   const { save } = await import("@tauri-apps/plugin-dialog");
   return save({ defaultPath, filters: [{ name: filterName, extensions: [extension] }] });
+}
+
+/** Asks the release endpoint for a newer version. Null when the app is up to date. */
+export async function checkUpdate(): Promise<AppUpdate | null> {
+  if (mockPromise) return (await mockPromise).checkUpdate();
+  const { check } = await import("@tauri-apps/plugin-updater");
+  return check();
+}
+
+/** Version of the running app. */
+export async function appVersion(): Promise<string> {
+  if (mockPromise) return (await mockPromise).version;
+  const { getVersion } = await import("@tauri-apps/api/app");
+  return getVersion();
 }
 
 export const api = {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   api,
+  appVersion,
   errText,
   type Endpoint,
   type KeyRole,
@@ -9,7 +10,7 @@ import {
   type ThemeSetting,
 } from "./api";
 import { bytes, languageName, TARGET_LANGUAGES } from "./format";
-import { useApp } from "./store";
+import { updateText, useApp } from "./store";
 import { ConfirmDialog, Radios, Select, Switch } from "./ui";
 
 const SECTIONS = [
@@ -28,6 +29,35 @@ const THEMES: { value: ThemeSetting; label: string }[] = [
   { value: "dark", label: "다크" },
   { value: "system", label: "시스템 설정 따름" },
 ];
+
+function UpdateCard() {
+  const { update, running, checkUpdate, installUpdate } = useApp();
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    appVersion().then(setVersion, () => setVersion(""));
+  }, []);
+  const busy = update.kind === "checking" || update.kind === "installing";
+  const text = updateText(update, running);
+  return (
+    <div className="card">
+      <span className="row2">
+        <span className="fhint">현재 버전</span>
+        <span className="ver" translate="no">{version}</span>
+        <button type="button" className="ab sm" disabled={busy} onClick={checkUpdate}>
+          업데이트 확인
+        </button>
+      </span>
+      <span className="row2" role="status">
+        {text && <span className={update.kind === "error" ? "fhint errtext" : update.kind === "available" ? "fhint ink" : "fhint"}>{text}</span>}
+        {update.kind === "available" && (
+          <button type="button" className="ab sm primary" onClick={installUpdate}>
+            설치하고 다시 시작
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
 
 function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boolean; onUse?: () => void }) {
   const { downloads, downloadErrors, startDownload, cancelDownload, deleteModel } = useApp();
@@ -926,6 +956,7 @@ export function SettingsTab({ active }: { active: boolean }) {
 
           <section className="grp" id="set-about" aria-labelledby="h-about">
             <h2 id="h-about">정보</h2>
+            <UpdateCard />
             <div className="card">
               <span className="fhint">모델과 라이선스</span>
               <ul className="notice-list">
