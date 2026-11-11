@@ -75,8 +75,8 @@ fn update_test(app: tauri::AppHandle) {
         }
     };
     tauri::async_runtime::spawn(async move {
-        let update = match app.updater().map(|u| u.check()) {
-            Ok(check) => check.await,
+        let update = match app.updater() {
+            Ok(updater) => updater.check().await,
             Err(e) => Err(e),
         };
         match update {
