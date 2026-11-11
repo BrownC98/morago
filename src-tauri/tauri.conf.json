@@ -34,7 +34,9 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "14.2"
+      "minimumSystemVersion": "14.2",
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     },
     "resources": {
       "resources/models/": "models/"

@@ -5,7 +5,8 @@
 # Usage: scripts/mac-launch-check.sh <path.dmg>
 set -uo pipefail
 dmg=$1
-work=$(mktemp -d)
+# No symlink in the path (/var -> /private/var): Tauri refuses such an exe path.
+work=$(cd "$(mktemp -d)" && pwd -P)
 fail=0
 note() { echo "::error::$*"; fail=1; }
 
@@ -25,7 +26,11 @@ for k in CFBundleExecutable CFBundleIdentifier LSMinimumSystemVersion NSMicropho
 done
 
 echo "== codesign -dv"
-codesign -dv --verbose=4 --entitlements - "$app" 2>&1
+codesign -dv --verbose=4 "$app" 2>&1
+echo "== entitlements"
+ent=$(codesign -d --entitlements - --xml "$app" 2>/dev/null)
+echo "$ent"
+grep -q com.apple.security.device.audio-input <<<"$ent" || note "no audio-input entitlement: the hardened runtime mutes the microphone"
 echo "== codesign --verify --deep --strict"
 # A bundle whose signature does not cover its contents is "damaged" for
 # Gatekeeper, and macOS gives no way to open it.

@@ -249,6 +249,11 @@ jobs:
           gh release download nsis_tauri_utils-v0.5.3 -R tauri-apps/nsis-tauri-utils -p nsis_tauri_utils.dll -D "$d" --clobber
       - name: Build app
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
+      # The v0.4.1 dmg had only the linker's signature, and macOS called the
+      # downloaded app "damaged" (run 42974938339).
+      - name: Launch check of the dmg
+        if: runner.os == 'macOS'
+        run: scripts/mac-launch-check.sh src-tauri/target/release/bundle/dmg/*.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: morago-${{ matrix.os }}
