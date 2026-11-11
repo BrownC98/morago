@@ -60,6 +60,17 @@ Fun-ASR-MLT-Nano는 transcribe.cpp(GGUF Q8_0, `handy-computer`가 변환한 파�
   Gemma 4 E2B는 혼자 2.8 GB, Whisper turbo와 함께 4.9 GB를 쓴다. 8 GB GPU에 두 모델이 함께 들어간다. Whisper turbo는 CPU에서 실시간보다 느리다. Fun-ASR 값은 FLEURS 문장 80개(약 13분)와 CPU 13개로 쟀고, 메모리는 최종 인식과 부분 자막 세션 둘을 연 뒤 줄어든 남은 GPU 메모리이다. Fun-ASR는 GPU에서만 부분 자막을 낸다.
 - GPU로 모델을 불러오지 못하면 회의를 시작하지 않고 원인을 보인다. 회의 중에 GPU 오류가 나면 회의를 멈추고 저장한 뒤 오류를 보인다.
 
+## 설치(사용자)
+
+설치 파일은 [Releases](https://github.com/BrownC98/morago/releases)에 있다. 개발자 인증서 서명이 없다.
+
+- Windows: SmartScreen 창에서 「추가 정보」 → 「실행」을 누른다.
+- macOS(Apple 실리콘, 14.2 이상): dmg를 열고 morago를 「응용 프로그램」 폴더로 끈다. 앱은 임시(ad-hoc) 서명만 있고 Apple 공증이 없으므로, 처음 열면 macOS가 「Apple은 'morago'에 악성 코드가 없음을 확인할 수 없습니다」라고 하고 열지 않는다.
+  1. 그 창에서 「완료」를 누른다.
+  2. 시스템 설정 › 개인정보 보호 및 보안을 연다. 아래쪽의 「'morago'이(가) 차단되었습니다」 옆 「그래도 열기」를 누르고 암호를 넣는다.
+  3. 또는 터미널에서 `xattr -dr com.apple.quarantine /Applications/morago.app`를 실행하고 앱을 연다.
+- v0.4.1까지의 dmg는 macOS가 「손상되었기 때문에 열 수 없습니다」라고 한다. 위 3번 명령으로 열거나 새 판을 받는다.
+
 ## 설치와 실행(개발)
 
 준비물: Node.js 24, pnpm 11, rustup(Rust 버전은 `rust-toolchain.toml`), cmake, clang.
@@ -79,7 +90,7 @@ Linux는 대상이 아니다. Linux에서는 sherpa-onnx(onnxruntime)와 llama.c
 
 종단 시험(실제 모델: VAD, SenseVoice Small, CAM++, Gemma 4 E2B, Whisper small, Fun-ASR-MLT-Nano)은 수동 CI 실행의 `e2e` 잡이 Windows·macOS에서 돌린다. 소리 장치 시험은 [docs/manual-audio-test.md](docs/manual-audio-test.md)의 순서로 실제 기기에서 한다.
 
-GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 검사(rustfmt, clippy, 테스트)를 돌린다. 설치 파일(Windows NSIS, macOS dmg)은 `v*` 태그와 수동 실행(`gh workflow run ci.yml --ref <브랜치> -f job=bundle`)에서만 만든다. 종단 시험은 `-f job=e2e`로 돌린다. 서명하지 않은 빌드이므로 macOS에서는 처음 열 때 Finder에서 오른쪽 클릭 → 열기를 쓴다.
+GitHub Actions(`.github/workflows/ci.yml`)가 push마다 Windows와 macOS에서 검사(rustfmt, clippy, 테스트)를 돌린다. 설치 파일(Windows NSIS, macOS dmg)은 `v*` 태그와 수동 실행(`gh workflow run ci.yml --ref <브랜치> -f job=bundle`)에서만 만든다. 종단 시험은 `-f job=e2e`로 돌린다. macOS 설치 파일의 서명은 아래 「설치(사용자)」를 본다.
 
 ## 쓰는 법
 
