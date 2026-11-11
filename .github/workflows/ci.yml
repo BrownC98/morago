@@ -269,8 +269,8 @@ jobs:
         if: runner.os == 'macOS'
         run: scripts/mac-launch-check.sh release-files/*.dmg
       # An old build (0.0.1) installs the new files above through the updater.
+      # Default shell: Git Bash puts its own link.exe before the MSVC linker.
       - name: Build an old version for the update test
-        shell: bash
         run: pnpm tauri build --bundles ${{ matrix.old }} --features update-test --config "$PWD/scripts/update-test.conf.json"
       - name: Update test
         shell: bash
