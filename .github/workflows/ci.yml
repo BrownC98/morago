@@ -203,8 +203,11 @@ jobs:
         include:
           - os: windows-2022
             bundles: nsis
+            old: nsis
           - os: macos-latest
-            bundles: dmg
+            # app: the updater archive (.app.tar.gz) comes from the app bundle.
+            bundles: app,dmg
+            old: app
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -247,17 +250,65 @@ jobs:
           unzip -q nsis-3.13.zip && mv nsis-3.13 NSIS && rm nsis-3.13.zip
           d=NSIS/Plugins/x86-unicode/additional; mkdir -p "$d"
           gh release download nsis_tauri_utils-v0.5.3 -R tauri-apps/nsis-tauri-utils -p nsis_tauri_utils.dll -D "$d" --clobber
+      # The updater key signs the update files (*.sig). AGENTS.md "Release".
       - name: Build app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
+      - name: Keep the release files
+        shell: bash
+        run: |
+          mkdir dist; b=src-tauri/target/release/bundle
+          cp $b/nsis/*-setup.exe* $b/dmg/*.dmg $b/macos/*.app.tar.gz* dist/ 2>/dev/null || true
+          ls -l dist
       # The v0.4.1 dmg had only the linker's signature, and macOS called the
       # downloaded app "damaged" (run 42974938339).
       - name: Launch check of the dmg
         if: runner.os == 'macOS'
-        run: scripts/mac-launch-check.sh src-tauri/target/release/bundle/dmg/*.dmg
+        run: scripts/mac-launch-check.sh dist/*.dmg
+      # An old build (0.0.1) installs the new files above through the updater.
+      - name: Build an old version for the update test
+        shell: bash
+        run: pnpm tauri build --bundles ${{ matrix.old }} --features update-test --config "$PWD/scripts/update-test.conf.json"
+      - name: Update test
+        shell: bash
+        run: scripts/update-test.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: morago-${{ matrix.os }}
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/dmg/*.dmg
+          path: dist/*
           if-no-files-found: error
+
+  # Release files and the updater manifest. On a tag: the GitHub release.
+  release:
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: morago-*
+          path: dist
+          merge-multiple: true
+      - name: Updater manifest
+        run: |
+          tag=${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          [ -n "$tag" ] || tag=v$(jq -r .version src-tauri/tauri.conf.json)
+          scripts/release-manifest.sh dist "$GITHUB_REPOSITORY" "$tag" > dist/latest.json
+          cat dist/latest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: latest-json
+          path: dist/latest.json
+      # The release notes stay with the person who releases: gh release edit.
+      - name: GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "morago ${TAG#v}" --notes ""
+          gh release upload "$TAG" --clobber dist/*-setup.exe dist/*.dmg dist/*.app.tar.gz dist/latest.json

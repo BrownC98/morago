@@ -51,6 +51,8 @@ sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # The GPU pack folder before Tauri starts (gpu.rs); Tauri uses the same crate.
 dirs = "7"
+# Updates from GitHub releases (latest.json); AGENTS.md "Release".
+tauri-plugin-updater = "2"
 
 # OS credential stores for API keys (secrets.rs). Linux is for development only.
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -75,6 +77,10 @@ linux-keyutils-keyring-store = "1.0.0"
 
 [dev-dependencies]
 hound = "3"
+
+[features]
+# CI update test only (scripts/update-test.sh): the app installs an update at start.
+update-test = []
 
 [patch.crates-io]
 whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
