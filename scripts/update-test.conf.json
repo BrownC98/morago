@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "bundle": { "createUpdaterArtifacts": false },
+  "plugins": {
+    "updater": {
+      "endpoints": ["http://127.0.0.1:8765/latest.json"],
+      "dangerousInsecureTransportProtocol": true
+    }
+  }
+}

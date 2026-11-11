@@ -12,7 +12,9 @@ import {
 } from "react";
 import {
   api,
+  checkUpdate as fetchUpdate,
   errText,
+  type AppUpdate,
   onEvent,
   type EngineStage,
   type GpuStatus,
@@ -32,6 +34,35 @@ export interface Toast {
   kind: "error" | "info";
   text: string;
   action?: { label: string; run: () => void };
+}
+
+/** App update: one state for the start toast and the settings card. */
+export type UpdateState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "none" }
+  | { kind: "error" }
+  /** `blocked`: install was pressed during a meeting. */
+  | { kind: "available"; version: string; blocked: boolean }
+  /** `pct` is null when the server sends no length. */
+  | { kind: "installing"; version: string; pct: number | null };
+
+/** Screen text of an update state. Empty for "idle". */
+export function updateText(u: UpdateState, running: boolean): string {
+  switch (u.kind) {
+    case "idle":
+      return "";
+    case "checking":
+      return "확인하는 중…";
+    case "none":
+      return "최신 버전입니다.";
+    case "error":
+      return "확인하지 못했습니다. 인터넷 연결을 확인하세요.";
+    case "available":
+      return u.blocked && running ? "회의를 마친 뒤 설치하세요." : `새 버전 ${u.version}이 있습니다.`;
+    case "installing":
+      return u.pct === null ? "내려받는 중…" : `내려받는 중… ${u.pct}%`;
+  }
 }
 
 interface Download {
@@ -82,6 +113,12 @@ export interface App {
   toast: Toast | null;
   notify: (kind: Toast["kind"], text: string, action?: Toast["action"]) => void;
   dismissToast: () => void;
+  update: UpdateState;
+  /** The update toast shows (from the check at app start until the user closes it). */
+  updateToast: boolean;
+  dismissUpdateToast: () => void;
+  checkUpdate: () => void;
+  installUpdate: () => void;
 }
 
 const Ctx = createContext<App | null>(null);
@@ -151,6 +188,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastId = useRef(0);
+  const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
+  const [updateToast, setUpdateToast] = useState(false);
+  const updateRef = useRef<AppUpdate | null>(null);
+  // On Windows the updater ends the process when the download ends: no meeting may start before that.
+  const installingRef = useRef(false);
   const saveChain = useRef<Promise<boolean>>(Promise.resolve(true));
   const settingsRef = useRef<Settings | null>(null);
 
@@ -181,6 +223,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     api.listMics().then(setMics, () => setMics([]));
     api.systemAudioSupport().then(setSystemAudio, () => setSystemAudio(null));
   }, [notify, refreshModels, refreshGpu]);
+
+  const setFound = useCallback((u: AppUpdate | null) => {
+    updateRef.current = u;
+    setUpdate(u ? { kind: "available", version: u.version, blocked: false } : { kind: "none" });
+  }, []);
+
+  // One update check at app start. A failure shows nothing.
+  useEffect(() => {
+    fetchUpdate().then((u) => {
+      setFound(u);
+      if (u) setUpdateToast(true);
+    }, () => {});
+  }, [setFound]);
 
   // Core events.
   useEffect(() => {
@@ -309,6 +364,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const startSession = useCallback(async () => {
+    if (installingRef.current) return;
     setStarting(true);
     // Clear first: the core can send utterances before the command returns.
     setUtterances([]);
@@ -351,6 +407,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStopping(false);
     }
   }, [bumpSessions, notify, openRecord]);
+
+  const checkUpdate = useCallback(() => {
+    setUpdate({ kind: "checking" });
+    fetchUpdate().then(setFound, () => setUpdate({ kind: "error" }));
+  }, [setFound]);
+
+  const installUpdate = useCallback(async () => {
+    const u = updateRef.current;
+    if (!u) return;
+    const { version } = u;
+    if (running || starting) {
+      setUpdate({ kind: "available", version, blocked: true });
+      return;
+    }
+    installingRef.current = true;
+    setUpdate({ kind: "installing", version, pct: null });
+    let total = 0;
+    let done = 0;
+    let shown = -1;
+    try {
+      await u.downloadAndInstall((e) => {
+        if (e.event === "Started") total = e.data.contentLength ?? 0;
+        else if (e.event === "Progress") done += e.data.chunkLength;
+        if (!total) return;
+        const pct = Math.min(100, Math.floor((done / total) * 100));
+        if (pct === shown) return;
+        shown = pct;
+        setUpdate({ kind: "installing", version, pct });
+      });
+      // Windows: the installer ends this process before here. macOS: start the new bundle.
+      await api.restartApp();
+    } catch (e) {
+      installingRef.current = false;
+      setUpdate({ kind: "available", version, blocked: false });
+      notify("error", errText(e));
+    }
+  }, [running, starting, notify]);
+
+  const dismissUpdateToast = useCallback(() => setUpdateToast(false), []);
 
   const goSettings = useCallback((section: string) => {
     setSettingsTarget(section);
@@ -395,6 +490,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       notify,
       dismissToast,
+      update,
+      updateToast,
+      dismissUpdateToast,
+      checkUpdate,
+      installUpdate,
     }),
     [
       tab,
@@ -432,6 +532,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       notify,
       dismissToast,
+      update,
+      updateToast,
+      dismissUpdateToast,
+      checkUpdate,
+      installUpdate,
     ],
   );
 

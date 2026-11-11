@@ -1,13 +1,16 @@
 // In-memory stand-in for the Tauri core. Used only in a plain browser (no Tauri), to develop the UI
-// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail,nogpu,gpufail
+// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail,nogpu,gpufail,update,updatefail
 //   many     600 utterances at once on start (scroll and render check)
 //   nomodel  the selected local ASR model is not installed
 //   nosystem system audio is not supported
 //   fail     start_session rejects
 //   nogpu    no NVIDIA GPU
 //   gpufail  start_session rejects when translation would run on the GPU
+//   update   the update check finds version 0.5.0; its download takes about 3 s
+//   updatefail the update check rejects; with `update`, the download rejects
 
 import type {
+  AppUpdate,
   GpuStatus,
   MockBackend,
   ModelInfo,
@@ -404,8 +407,29 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
   }
 }
 
+const fakeUpdate: AppUpdate = {
+  version: "0.5.0",
+  async downloadAndInstall(onEvent) {
+    const total = 60 * MB;
+    onEvent?.({ event: "Started", data: { contentLength: total } });
+    for (let done = 0; done < total; done += 2 * MB) {
+      await delay(undefined, 100);
+      if (flags.has("updatefail") && done > total / 2) throw "업데이트를 내려받지 못했습니다: 연결이 끊어졌습니다.";
+      onEvent?.({ event: "Progress", data: { chunkLength: 2 * MB } });
+    }
+    onEvent?.({ event: "Finished" });
+  },
+};
+
+function checkUpdate(): Promise<AppUpdate | null> {
+  if (flags.has("updatefail") && !flags.has("update")) return delay(undefined, 300).then(() => Promise.reject("network"));
+  return delay(flags.has("update") ? fakeUpdate : null, 300);
+}
+
 export const backend: MockBackend = {
   invoke,
+  checkUpdate,
+  version: "0.4.1",
   listen(event, cb) {
     if (!listeners.has(event)) listeners.set(event, new Set());
     listeners.get(event)!.add(cb);

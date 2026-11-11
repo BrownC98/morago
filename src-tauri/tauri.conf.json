@@ -40,6 +40,18 @@
     },
     "resources": {
       "resources/models/": "models/"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ5OEEyRDc2Q0E0NEIwM0IKUldRN3NFVEtkaTJLU1dzckdzM3l0YkhYUnI0Y0w0cFc1akc2MlRncXpnbndhUkY5OUFQVUZ2UWYK",
+      "endpoints": [
+        "https://github.com/BrownC98/morago/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

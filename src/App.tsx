@@ -2,7 +2,7 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import { LiveTab, Timer } from "./LiveTab";
 import { RecordsTab } from "./RecordsTab";
 import { SettingsTab } from "./SettingsTab";
-import { AppProvider, useApp, type Tab } from "./store";
+import { AppProvider, updateText, useApp, type Tab } from "./store";
 import { useTheme } from "./theme";
 import { Icon } from "./ui";
 
@@ -14,7 +14,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 function Shell() {
   const app = useApp();
-  const { tab, setTab, toast } = app;
+  const { tab, setTab, toast, update } = app;
   useTheme(app.settings?.theme);
   useEffect(() => {
     if (!toast || toast.kind !== "info") return;
@@ -79,26 +79,41 @@ function Shell() {
           <SettingsTab active={tab === "settings"} />
         </div>
       </main>
-      {toast && (
-        <div className="toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} key={toast.id}>
-          <span>{toast.text}</span>
-          {toast.action && (
-            <button
-              type="button"
-              className="ab sm"
-              onClick={() => {
-                toast.action?.run();
-                app.dismissToast();
-              }}
-            >
-              {toast.action.label}
+      <div className="toasts">
+        {app.updateToast && (update.kind === "available" || update.kind === "installing") && (
+          <div className="toast" data-kind="info" role="status">
+            <span>{updateText(update, app.running)}</span>
+            {update.kind === "available" && (
+              <button type="button" className="ab sm primary" onClick={app.installUpdate}>
+                설치하고 다시 시작
+              </button>
+            )}
+            <button type="button" className="ab ghost sm icon" aria-label="알림 닫기" onClick={app.dismissUpdateToast}>
+              <Icon name="close" />
             </button>
-          )}
-          <button type="button" className="ab ghost sm icon" aria-label="알림 닫기" onClick={app.dismissToast}>
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
+          </div>
+        )}
+        {toast && (
+          <div className="toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} key={toast.id}>
+            <span>{toast.text}</span>
+            {toast.action && (
+              <button
+                type="button"
+                className="ab sm"
+                onClick={() => {
+                  toast.action?.run();
+                  app.dismissToast();
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
+            <button type="button" className="ab ghost sm icon" aria-label="알림 닫기" onClick={app.dismissToast}>
+              <Icon name="close" />
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
