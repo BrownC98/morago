@@ -50,7 +50,7 @@ echo "== sound device"
 brew install --cask blackhole-2ch >"$out/blackhole.txt" 2>&1 || tail -20 "$out/blackhole.txt"
 sudo killall coreaudiod 2>/dev/null || sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 sleep 5
-brew install switchaudio-osx >>"$out/blackhole.txt" 2>&1
+brew install switchaudio-osx sox >>"$out/blackhole.txt" 2>&1
 SwitchAudioSource -t input -s "BlackHole 2ch"; SwitchAudioSource -t output -s "BlackHole 2ch"
 system_profiler SPAudioDataType 2>&1 | tee "$out/audio-devices.txt"
 [ "$(SwitchAudioSource -c -t input)$(SwitchAudioSource -c -t output)" = "BlackHole 2chBlackHole 2ch" ] && res sound-device info "BlackHole 2ch is the default input and output device" || res sound-device info "no loopback device: a meeting gets no sound"
@@ -177,7 +177,13 @@ hf=https://huggingface.co/csukuangfj
 curl -fsSL --retry 5 -o "$out/wavs/en.wav" $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
 curl -fsSL --retry 5 -o "$out/wavs/ja.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
 curl -fsSL --retry 5 -o "$out/wavs/ko.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ko.wav
+# A second recorder on the same input: it tells a clip that did not play
+# (a slow runner) from a clip that the app did not capture.
+rec -q -c 1 -r 16000 -b 16 "$out/witness.wav" 2>"$out/witness.log" &
+witness=$!
+date -u +"witness start %T"
 for w in en ja ko; do afinfo "$out/wavs/$w.wav" | grep -E 'File:|duration'; date -u +%T; afplay "$out/wavs/$w.wav" 2>&1; sleep ${CLIP_GAP:-6}; done
+kill -INT $witness; wait $witness 2>/dev/null
 rm -rf "$out/wavs"
 shot 3-meeting-after-speech
 # Until a translation is in the session file (the model loads at the first one).
