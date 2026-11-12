@@ -1,6 +1,6 @@
 [package]
 name = "morago"
-version = "0.7.0"
+version = "0.7.1"
 description = "Meeting minutes with live translated subtitles"
 authors = ["morago"]
 edition = "2024"
