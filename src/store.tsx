@@ -188,8 +188,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastId = useRef(0);
-  /** Source of the capture error in the status bar: only that source may clear it. */
-  const captureFrom = useRef<SourceKind | null>(null);
+  /** Capture errors per source, oldest first. The status bar shows the newest; a clear removes one source. */
+  const captureErrors = useRef(new Map<SourceKind | null, string>());
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
   const [updateToast, setUpdateToast] = useState(false);
   const updateRef = useRef<AppUpdate | null>(null);
@@ -277,15 +277,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         else if (p.stage === "session") {
           setSessionNotice(p.message);
           setSessionsVersion((v) => v + 1);
+        } else if (p.stage === "capture") {
+          const m = captureErrors.current;
+          m.delete(p.source);
+          if (p.message) m.set(p.source, p.message);
+          const shown = [...m.values()].pop();
+          setEngineErrors(({ capture: _, ...e }) => (shown ? { ...e, capture: shown } : e));
         } else if (p.message) {
-          if (p.stage === "capture") captureFrom.current = p.source;
           setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
-        } else if (p.stage !== "capture" || captureFrom.current === p.source) {
-          setEngineErrors((e) => {
-            const n = { ...e };
-            delete n[p.stage];
-            return n;
-          });
+        } else {
+          setEngineErrors(({ [p.stage]: _, ...e }) => e);
         }
       }),
       onEvent("model-download", (p) =>
@@ -381,6 +382,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setUtterances([]);
     setPartials({});
     setEngineErrors({});
+    captureErrors.current.clear();
     setSessionNotice(null);
     try {
       const m = await api.startSession(null);

@@ -8,7 +8,8 @@
 //   gpufail  start_session rejects when translation would run on the GPU
 //   update   the update check finds version 0.5.0; its download takes about 3 s
 //   updatefail the update check rejects; with `update`, the download rejects
-//   silent   the microphone reports a silent start; sound arrives (the error clears) after 8 s
+//   silent   both sources report a silent start; system sound arrives after 4 s (the mic error stays),
+//            mic sound after 8 s (the capture error clears)
 
 import type {
   AppUpdate,
@@ -194,6 +195,8 @@ function stopTimers() {
 const SILENT_MIC =
   "마이크에서 3초 동안 소리가 전혀 들어오지 않습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 morago가 켜져 있는지 확인하세요.";
 
+const SILENT_SYSTEM = "시스템 소리에서 3초 동안 소리가 전혀 들어오지 않습니다. 재생 중인 소리가 없거나 출력 장치 설정에 문제가 있을 수 있습니다.";
+
 function startRun(): SessionMeta {
   const now = new Date();
   const id = fmtId(now, "m0ck");
@@ -226,6 +229,8 @@ function startRun(): SessionMeta {
   if (flags.has("silent")) {
     r.timers.push(
       window.setTimeout(() => emit("engine-error", { stage: "capture", source: "mic", message: SILENT_MIC }), 500),
+      window.setTimeout(() => emit("engine-error", { stage: "capture", source: "system", message: SILENT_SYSTEM }), 600),
+      window.setTimeout(() => emit("engine-error", { stage: "capture", source: "system", message: "" }), 4000),
       window.setTimeout(() => emit("engine-error", { stage: "capture", source: "mic", message: "" }), 8000),
     );
   }
