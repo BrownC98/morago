@@ -150,6 +150,7 @@ export interface EventMap {
   "utterance-partial": PartialText;
   "audio-level": { source: SourceKind; rms: number };
   "session-state": { running: boolean; sessionId: string | null; startedAt: string | null };
+  /** An empty `message` clears the error of that stage (capture: of that source). */
   "engine-error": { stage: EngineStage; source: SourceKind | null; message: string };
   "model-download": DownloadProgress;
   "model-download-done": { modelId: string; error: string | null };

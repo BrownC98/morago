@@ -188,6 +188,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastId = useRef(0);
+  /** Source of the capture error in the status bar: only that source may clear it. */
+  const captureFrom = useRef<SourceKind | null>(null);
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
   const [updateToast, setUpdateToast] = useState(false);
   const updateRef = useRef<AppUpdate | null>(null);
@@ -275,7 +277,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         else if (p.stage === "session") {
           setSessionNotice(p.message);
           setSessionsVersion((v) => v + 1);
-        } else setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
+        } else if (p.message) {
+          if (p.stage === "capture") captureFrom.current = p.source;
+          setEngineErrors((e) => ({ ...e, [p.stage]: p.message }));
+        } else if (p.stage !== "capture" || captureFrom.current === p.source) {
+          setEngineErrors((e) => {
+            const n = { ...e };
+            delete n[p.stage];
+            return n;
+          });
+        }
       }),
       onEvent("model-download", (p) =>
         setDownloads((d) => ({ ...d, [p.model_id]: { done: p.done_bytes, total: p.total_bytes } })),

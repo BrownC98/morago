@@ -8,7 +8,7 @@
 //! is held for a few instructions and only by the worker's park and the callback's wake-up, never
 //! across I/O, so the callback does not wait on anything slow.
 
-use super::pipeline::{Processor, ZeroWatch};
+use super::pipeline::{Processor, ZeroEvent, ZeroWatch};
 use super::{ErrorSink, silent_message};
 use crate::types::{AudioChunk, SourceKind};
 use crossbeam_channel::{Receiver, RecvTimeoutError, SendTimeoutError, Sender, TrySendError};
@@ -160,9 +160,18 @@ fn handle(
     watch: &mut ZeroWatch,
     emit: &mut dyn FnMut(AudioChunk),
 ) {
-    if out.watch_zeros && watch.feed(&block.mono, block.rate) {
-        log::warn!("audio {:?}: only digital silence at the start", out.source);
-        (out.report)(silent_message(out.source, cfg!(target_os = "macos")));
+    if out.watch_zeros {
+        match watch.feed(&block.mono, block.rate) {
+            Some(ZeroEvent::Silent) => {
+                log::warn!("audio {:?}: only digital silence at the start", out.source);
+                (out.report)(silent_message(out.source, cfg!(target_os = "macos")));
+            }
+            Some(ZeroEvent::Sound) => {
+                log::info!("audio {:?}: sound after the silent start", out.source);
+                (out.report)(String::new());
+            }
+            None => {}
+        }
     }
     if processor.as_ref().is_some_and(|p| p.rate() != block.rate) {
         // The device changed to another sample rate: finish the old audio first.
@@ -280,6 +289,29 @@ mod tests {
         let (out, _rx, reports) = output(SourceKind::Mic, t0);
         run(inbox, &out);
         assert_eq!(reports.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sound_after_a_silent_start_clears_the_report() {
+        let t0 = Instant::now();
+        let (feeder, inbox) = queue();
+        for i in 0..50u32 {
+            let level = if i < 40 { 0.0 } else { 0.1 };
+            feeder.feed(
+                t0 + Duration::from_millis(u64::from(i) * 100),
+                16_000,
+                |v| {
+                    v.extend(std::iter::repeat_n(level, 1_600));
+                },
+            );
+        }
+        drop(feeder);
+        let (out, _rx, reports) = output(SourceKind::Mic, t0);
+        run(inbox, &out);
+        let reports = reports.lock().unwrap();
+        assert_eq!(reports.len(), 2);
+        assert!(!reports[0].is_empty());
+        assert!(reports[1].is_empty(), "an empty message clears the error");
     }
 
     #[test]

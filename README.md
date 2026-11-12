@@ -64,9 +64,9 @@ Fun-ASR-MLT-Nano는 transcribe.cpp(GGUF Q8_0, `handy-computer`가 변환한 파�
 설치 파일은 [Releases](https://github.com/BrownC98/morago/releases)에 있다. 개발자 인증서 서명이 없다.
 
 - Windows: SmartScreen 창에서 「추가 정보」 → 「실행」을 누른다.
-- macOS(Apple 실리콘, 14.2 이상): dmg를 열고 morago를 「응용 프로그램」 폴더로 끈다. 앱은 임시(ad-hoc) 서명만 있고 Apple 공증이 없으므로, 처음 열면 macOS가 「Apple은 'morago'에 악성 코드가 없음을 확인할 수 없습니다」라고 하고 열지 않는다.
+- macOS(Apple 실리콘, 14.2 이상): dmg를 열고 morago를 「응용 프로그램」 폴더로 끈다. 앱은 임시(ad-hoc) 서명만 있고 Apple 공증이 없으므로, 처음 열면 macOS가 「“morago” 열리지 않음」 창(「Apple은 'morago'에 악성 코드가 없음을 확인할 수 없습니다」, 단추 「휴지통으로 이동」·「완료」)을 보이고 열지 않는다. macOS 26에는 「열기」 단추가 없다.
   1. 그 창에서 「완료」를 누른다.
-  2. 시스템 설정 › 개인정보 보호 및 보안을 연다. 아래쪽의 「'morago'이(가) 차단되었습니다」 옆 「그래도 열기」를 누르고 암호를 넣는다.
+  2. 시스템 설정 › 개인정보 보호 및 보안을 연다. 맨 아래의 「'morago'이(가) 차단되었습니다」 옆 「그래도 열기」를 누르고 암호를 넣는다.
   3. 또는 터미널에서 `xattr -dr com.apple.quarantine /Applications/morago.app`를 실행하고 앱을 연다.
 - v0.4.1까지의 dmg는 macOS가 「손상되었기 때문에 열 수 없습니다」라고 한다. 위 3번 명령으로 열거나 새 판을 받는다.
 

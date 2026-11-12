@@ -1,5 +1,5 @@
 // In-memory stand-in for the Tauri core. Used only in a plain browser (no Tauri), to develop the UI
-// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail,nogpu,gpufail,update,updatefail
+// and to take screenshots. It follows docs/ipc.md. Query flags: ?mock=many,nomodel,nosystem,fail,nogpu,gpufail,update,updatefail,silent
 //   many     600 utterances at once on start (scroll and render check)
 //   nomodel  the selected local ASR model is not installed
 //   nosystem system audio is not supported
@@ -8,6 +8,7 @@
 //   gpufail  start_session rejects when translation would run on the GPU
 //   update   the update check finds version 0.5.0; its download takes about 3 s
 //   updatefail the update check rejects; with `update`, the download rejects
+//   silent   the microphone reports a silent start; sound arrives (the error clears) after 8 s
 
 import type {
   AppUpdate,
@@ -190,6 +191,9 @@ function stopTimers() {
   run?.timers.forEach((t) => clearInterval(t));
 }
 
+const SILENT_MIC =
+  "마이크에서 3초 동안 소리가 전혀 들어오지 않습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 morago가 켜져 있는지 확인하세요.";
+
 function startRun(): SessionMeta {
   const now = new Date();
   const id = fmtId(now, "m0ck");
@@ -218,6 +222,13 @@ function startRun(): SessionMeta {
       emit("audio-level", { source: "system", rms: sys });
     }, 100),
   );
+
+  if (flags.has("silent")) {
+    r.timers.push(
+      window.setTimeout(() => emit("engine-error", { stage: "capture", source: "mic", message: SILENT_MIC }), 500),
+      window.setTimeout(() => emit("engine-error", { stage: "capture", source: "mic", message: "" }), 8000),
+    );
+  }
 
   if (flags.has("many")) {
     for (const u of seed(600)) {

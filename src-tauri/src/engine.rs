@@ -44,6 +44,7 @@ struct LevelEvent {
 struct ErrorEvent<'a> {
     stage: &'a str,
     source: Option<SourceKind>,
+    /// Empty: the error of this stage (and source) is over.
     message: &'a str,
 }
 
@@ -58,7 +59,9 @@ impl Sink for AppHandle {
         let _ = self.emit("audio-level", LevelEvent { source, rms });
     }
     fn error(&self, stage: &str, source: Option<SourceKind>, message: &str) {
-        log::warn!("engine {stage} error: {message}");
+        if !message.is_empty() {
+            log::warn!("engine {stage} error: {message}");
+        }
         let _ = self.emit(
             "engine-error",
             ErrorEvent {

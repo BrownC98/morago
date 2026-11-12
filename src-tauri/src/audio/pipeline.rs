@@ -169,35 +169,52 @@ struct Segment {
 }
 
 /// Reports once when a stream gives exact digital zeros for its first seconds. A real
-/// microphone or tap never does; a denied permission (macOS) does.
+/// microphone or tap never does; a denied permission (macOS) or a muted device does. After that
+/// report, the first sound gives `Sound` once, so the error can go away.
 pub struct ZeroWatch {
     frames: u64,
-    done: bool,
+    state: WatchState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatchState {
+    Counting,
+    Reported,
+    Done,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ZeroEvent {
+    /// The first `ZERO_WATCH_SECS` seconds were all exact zeros.
+    Silent,
+    /// Sound arrived after `Silent`.
+    Sound,
 }
 
 impl ZeroWatch {
     pub fn new() -> Self {
         Self {
             frames: 0,
-            done: false,
+            state: WatchState::Counting,
         }
     }
 
-    /// True once, when the first `ZERO_WATCH_SECS` seconds were all exact zeros.
-    pub fn feed(&mut self, mono: &[f32], rate: u32) -> bool {
-        if self.done {
-            return false;
+    pub fn feed(&mut self, mono: &[f32], rate: u32) -> Option<ZeroEvent> {
+        if self.state == WatchState::Done {
+            return None;
         }
         if mono.iter().any(|&s| s != 0.0) {
-            self.done = true;
-            return false;
+            let was = std::mem::replace(&mut self.state, WatchState::Done);
+            return (was == WatchState::Reported).then_some(ZeroEvent::Sound);
         }
-        self.frames += mono.len() as u64;
-        if self.frames >= u64::from(rate) * ZERO_WATCH_SECS {
-            self.done = true;
-            return true;
+        if self.state == WatchState::Counting {
+            self.frames += mono.len() as u64;
+            if self.frames >= u64::from(rate) * ZERO_WATCH_SECS {
+                self.state = WatchState::Reported;
+                return Some(ZeroEvent::Silent);
+            }
         }
-        false
+        None
     }
 }
 
@@ -695,13 +712,8 @@ mod tests {
     fn zero_watch_reports_once_after_three_seconds_of_zeros() {
         let mut w = ZeroWatch::new();
         let zeros = vec![0.0f32; 4_800];
-        let mut hits = 0;
-        for _ in 0..40 {
-            if w.feed(&zeros, 48_000) {
-                hits += 1;
-            }
-        }
-        assert_eq!(hits, 1);
+        let events: Vec<_> = (0..40).filter_map(|_| w.feed(&zeros, 48_000)).collect();
+        assert_eq!(events, [ZeroEvent::Silent]);
     }
 
     #[test]
@@ -709,14 +721,27 @@ mod tests {
         let mut w = ZeroWatch::new();
         let zeros = vec![0.0f32; 4_800];
         for _ in 0..10 {
-            assert!(!w.feed(&zeros, 48_000));
+            assert_eq!(w.feed(&zeros, 48_000), None);
         }
         let mut quiet = zeros.clone();
         quiet[10] = 1e-5;
-        assert!(!w.feed(&quiet, 48_000));
+        assert_eq!(w.feed(&quiet, 48_000), None);
         for _ in 0..100 {
-            assert!(!w.feed(&zeros, 48_000));
+            assert_eq!(w.feed(&zeros, 48_000), None);
         }
+    }
+
+    #[test]
+    fn zero_watch_clears_once_when_sound_arrives_after_the_report() {
+        let mut w = ZeroWatch::new();
+        let zeros = vec![0.0f32; 4_800];
+        let mut quiet = zeros.clone();
+        quiet[10] = 1e-5;
+        let mut events: Vec<_> = (0..40).filter_map(|_| w.feed(&zeros, 48_000)).collect();
+        for block in [&quiet, &zeros, &quiet] {
+            events.extend(w.feed(block, 48_000));
+        }
+        assert_eq!(events, [ZeroEvent::Silent, ZeroEvent::Sound]);
     }
 
     #[test]
