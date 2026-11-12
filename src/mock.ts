@@ -396,7 +396,9 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
     case "export_session":
       return delay(undefined, 200);
     case "export_session_audio":
-      return Promise.reject("이 회의에는 녹음이 없습니다. 녹음은 설정에서 켠 뒤의 회의부터 저장합니다.");
+      return Promise.reject("이 회의에는 녹음이 없습니다. 회의 탭에서 녹음을 켠 회의만 녹음을 저장합니다.");
+    case "open_sessions_dir":
+      return delay(undefined);
     case "gpu_status":
       return delay(gpuStatus());
     case "restart_app":

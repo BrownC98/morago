@@ -48,6 +48,7 @@ pub fn run() {
             commands::delete_session,
             commands::export_session,
             commands::export_session_audio,
+            commands::open_sessions_dir,
             commands::gpu_status,
             commands::restart_app,
         ])

@@ -2,7 +2,7 @@
 // The types copy the serde JSON of src-tauri/src/{types,settings,models,secrets}.rs.
 // In a plain browser (no Tauri) the calls go to the in-memory mock in mock.ts.
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 
@@ -222,6 +222,11 @@ export async function appVersion(): Promise<string> {
   return getVersion();
 }
 
+/** URL of a recording for an <audio> element (Tauri asset protocol). */
+export function audioSrc(path: string): string {
+  return convertFileSrc(path);
+}
+
 export const api = {
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<void>("save_settings", { settings }),
@@ -256,6 +261,8 @@ export const api = {
   /** Copies the recording (WAV) to `path`; rejects if the session has none. */
   exportSessionAudio: (id: string, path: string) =>
     call<void>("export_session_audio", { id, path }),
+  /** Opens the folder of the session files and recordings in Explorer or Finder. */
+  openSessionsDir: () => call<void>("open_sessions_dir"),
   gpuStatus: () => call<GpuStatus>("gpu_status"),
   restartApp: () => call<void>("restart_app"),
 };

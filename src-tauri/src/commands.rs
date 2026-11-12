@@ -568,7 +568,7 @@ pub fn export_session_audio(
     }
     let audio = state
         .session_audio(&id)?
-        .ok_or("이 회의에는 녹음이 없습니다. 녹음은 설정에서 켠 뒤의 회의부터 저장합니다.")?;
+        .ok_or("이 회의에는 녹음이 없습니다. 회의 탭에서 녹음을 켠 회의만 녹음을 저장합니다.")?;
     // A copy onto itself would empty the recording.
     if std::fs::canonicalize(&path)
         .is_ok_and(|p| std::fs::canonicalize(&audio).is_ok_and(|a| a == p))
@@ -578,6 +578,19 @@ pub fn export_session_audio(
     std::fs::copy(&audio, &path)
         .map(|_| ())
         .map_err(|e| format!("녹음 파일을 쓰지 못했습니다({}): {e}", path.display()))
+}
+
+/// Opens the folder of the session files and recordings in the file manager.
+#[tauri::command]
+pub fn open_sessions_dir(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let store = state.store();
+    let dir = store.root();
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("기록 폴더를 만들 수 없습니다({}): {e}", dir.display()))?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("기록 폴더를 열 수 없습니다({}): {e}", dir.display()))
 }
 
 #[cfg(test)]

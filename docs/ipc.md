@@ -27,6 +27,7 @@ Rust types are in `src-tauri/src/types.rs`, `settings.rs`, `models.rs`, `secrets
 | `delete_session` | `{ id }` | – |
 | `export_session` | `{ id, format: "markdown"\|"srt"\|"json"\|"csv", path }` | – (writes the file; UI picks `path` with the dialog plugin `save()`) |
 | `export_session_audio` | `{ id, path }` | – (copies the recording, mono 16 kHz 16-bit WAV, to `path`; rejects if the session has none or runs now) |
+| `open_sessions_dir` | – | – (opens the session folder, texts and recordings, in Explorer or Finder; makes it if missing) |
 | `gpu_status` | – | `GpuStatus` (`gpu.rs`): GPU names, hint, GPU pack, devices of the local translation model (`translate`) and the local speech recognition model (`asr`), of the running session, else of the settings. `null`: a service does the work |
 | `restart_app` | – | – (refused while a session runs; a new GPU pack is used after a restart) |
 

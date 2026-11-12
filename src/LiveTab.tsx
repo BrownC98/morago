@@ -19,7 +19,8 @@ function Meter({ rms, on }: { rms: number; on: boolean }) {
   );
 }
 
-export function Timer() {
+/** Milliseconds since the running meeting started, every second; null when none runs. */
+function useElapsed(): number | null {
   const { running, startedAt } = useApp();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -28,12 +29,28 @@ export function Timer() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [running]);
-  if (!running || !startedAt) return null;
+  return running && startedAt ? Math.max(0, now - Date.parse(startedAt)) : null;
+}
+
+export function Timer() {
+  const ms = useElapsed();
+  if (ms === null) return null;
   return (
     <span className="timer" role="timer" aria-label="회의 시간">
-      {clock(now - Date.parse(startedAt))}
+      {clock(ms)}
     </span>
   );
+}
+
+/** Bytes per second of the recording: mono 16 kHz 16-bit WAV. */
+const RECORD_BYTES_PER_SEC = 32_000;
+
+/** Red dot and file size while the meeting is recorded. */
+function RecordingBadge() {
+  const ms = useElapsed();
+  if (ms === null) return null;
+  const mb = ((ms / 1000) * RECORD_BYTES_PER_SEC) / 1e6;
+  return <span className="recdot">녹음 중 · {mb.toFixed(1)} MB</span>;
 }
 
 const STAGE_NAME: Record<EngineStage, string> = {
@@ -132,6 +149,14 @@ export function LiveTab({ active }: { active: boolean }) {
             >
               시스템 소리
               <Meter rms={levels.system} on={running && sysOk && settings.capture_system} />
+            </Switch>
+            <Switch
+              checked={settings.record_audio}
+              disabled={running}
+              title={running ? "회의 중에는 바꿀 수 없습니다" : "켜면 회의 소리를 기록과 함께 WAV 파일로 저장합니다"}
+              onChange={(v) => app.updateSettings({ record_audio: v })}
+            >
+              녹음
             </Switch>
           </span>
           <span className="sp" />
@@ -254,6 +279,7 @@ export function LiveTab({ active }: { active: boolean }) {
           </span>
         ))}
         <span className="sp" />
+        {running && settings.record_audio && !engineErrors.store?.startsWith("녹음을") && <RecordingBadge />}
         {(running || utterances.length > 0) && <span>자동 저장: 발화 {number(utterances.length)}개</span>}
       </div>
     </div>
