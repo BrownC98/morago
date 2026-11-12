@@ -7,10 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: "e2e: end-to-end test with real models. bundle: installers."
+        description: "e2e: end-to-end test with real models. bundle: installers. mac-install: install and use the released dmg."
         type: choice
         required: true
-        options: [e2e, bundle]
+        options: [e2e, bundle, mac-install]
+      tag:
+        description: "mac-install: the release tag (empty: the latest release)"
 
 # A new push to a work branch cancels its older run. Runs on master, the
 # integration branch 회의번역앱 and gate/* always finish: the merge gate waits
@@ -281,6 +283,25 @@ jobs:
           name: morago-${{ matrix.os }}
           path: release-files/*
           if-no-files-found: error
+
+  # A user's path on a Mac with the dmg of a GitHub release: install, open,
+  # download models, run a meeting with a recording, export, start again.
+  # Manual runs only, after a release.
+  mac-install:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'mac-install' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/mac-install/check.sh mac-install-out "$TAG"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-install
+          path: mac-install-out
 
   # Release files and the updater manifest. On a tag: the GitHub release.
   release:
