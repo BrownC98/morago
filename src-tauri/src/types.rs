@@ -84,7 +84,7 @@ pub struct SessionMeta {
     pub ended_at: Option<String>,
     /// ISO 639-1 target language at session start.
     pub target_language: String,
-    /// Human-readable provider labels, for example "Local Whisper small".
+    /// Human-readable provider labels, for example "로컬 SenseVoice Small".
     /// Never contains a URL with credentials or an API key.
     pub asr_label: String,
     pub translator_label: String,

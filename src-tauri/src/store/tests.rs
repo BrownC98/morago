@@ -10,7 +10,7 @@ fn meta(id: &str, started_at: &str) -> SessionMeta {
         started_at: started_at.into(),
         ended_at: None,
         target_language: "ko".into(),
-        asr_label: "Local Whisper small".into(),
+        asr_label: "로컬 SenseVoice Small".into(),
         translator_label: "Local Gemma 4 E2B".into(),
         speaker_names: BTreeMap::new(),
     }
@@ -309,7 +309,7 @@ fn export_markdown_golden() {
         "- 날짜: 2026-11-08 14:02\n",
         "- 원문 언어: en, ko\n",
         "- 번역 언어: ko\n",
-        "- 음성 인식: Local Whisper small\n",
+        "- 음성 인식: 로컬 SenseVoice Small\n",
         "- 번역: Local Gemma 4 E2B\n",
         "\n",
         "**화자 1** · 00:01:23–00:01:31  \n",

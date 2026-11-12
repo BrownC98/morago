@@ -1,16 +1,16 @@
 # morago: agent notes
 
 Desktop app (Windows, macOS) for meeting minutes with live translated subtitles.
-Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs (WASAPI loopback, Core Audio tap) and in-process native models (sherpa-onnx, llama.cpp, whisper.cpp) from Rust; small installer.
+Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs (WASAPI loopback, Core Audio tap) and in-process native models (sherpa-onnx, llama.cpp, transcribe.cpp) from Rust; small installer.
 
 ## Layout
 
 - `src-tauri/src/types.rs`: shared data types (contract between modules).
 - `src-tauri/src/audio/`: mic + system audio capture, resample to 16 kHz mono.
-- `src-tauri/src/speech/`: VAD, ASR providers, speaker diarization. sherpa-onnx: SenseVoice, Qwen3-ASR, VAD, CAM++. Whisper: whisper.cpp (`whisper-rs`) on the ggml of llama.cpp through the fork `src-tauri/vendor/whisper-rs-sys`. Fun-ASR-MLT-Nano: transcribe.cpp (`transcribe-cpp`) on the same ggml through the fork `src-tauri/vendor/transcribe-cpp-sys`. Each fork's README says how to update it.
-- `src-tauri/src/models.rs`: downloadable models (ASR: SenseVoice Small default, Qwen3-ASR 0.6B, Whisper ggml, Fun-ASR GGUF; Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
+- `src-tauri/src/speech/`: VAD, ASR providers, speaker diarization. sherpa-onnx: SenseVoice, Qwen3-ASR, Parakeet 일본어, VAD, CAM++. Fun-ASR-MLT-Nano: transcribe.cpp (`transcribe-cpp`) on the ggml of llama.cpp through the fork `src-tauri/vendor/transcribe-cpp-sys`; its README says how to update it. Local Whisper was removed on 2026-11-12 (`models::RETIRED_IDS`).
+- `src-tauri/src/models.rs`: downloadable models (ASR: SenseVoice Small default, Qwen3-ASR 0.6B, Parakeet 일본어, Fun-ASR GGUF; Gemma 4) with URL lists and pinned SHA-256; bundled models (Silero VAD, CAM++) in `src-tauri/resources/models/` (Tauri resources), checked by `verify_bundled`.
 - `src-tauri/src/translate/`: translation providers.
-- `src-tauri/src/gpu.rs`: GPU choice for llama.cpp, whisper.cpp and transcribe.cpp (one ggml; Metal on macOS, CUDA on Windows), the downloadable CUDA DLL pack, delay-load failure hook. `engine::place_models` places both models of a session on one GPU.
+- `src-tauri/src/gpu.rs`: GPU choice for llama.cpp and transcribe.cpp (one ggml; Metal on macOS, CUDA on Windows), the downloadable CUDA DLL pack, delay-load failure hook. `engine::place_models` places both models of a session on one GPU.
 - `src-tauri/src/settings.rs`, `secrets.rs`: settings JSON and API keys in the OS credential store.
 - `src-tauri/src/store/`: session files and export.
 - `src-tauri/src/engine.rs`: wires the pipeline and emits UI events.
@@ -21,7 +21,7 @@ Stack: Tauri 2 (Rust core) + React/TypeScript (Vite). Reason: native audio APIs 
 - Never write an API key to settings, logs, session files, exports or error text. Use `secrets::Secret`.
 - Change `types.rs` and module signatures only with the coordinator's approval.
 - Windows link: sherpa-onnx prebuilt libs use the static CRT (/MT); `src-tauri/.cargo/config.toml` builds llama.cpp the same way. Do not delete it.
-- Windows CUDA: the installer has no CUDA DLL. `build.rs` delay-loads them (`/DELAYLOAD`); `gpu.rs` has the delay-load hooks: they load the pack DLLs from `gpu::app_dir()` (the first load comes before `main`), else stubs. A new static import of a CUDA DLL stops the app on PCs without one; the test `cuda_dlls_are_delay_loaded` checks this. A CUDA out-of-memory error ends the process. By the decision of 2026-11-09 the app does not check free GPU memory: `gpu::place` puts the translation model, Whisper and Fun-ASR on the chosen GPU, and the user accepts the risk. Do not add a memory check without a new decision.
+- Windows CUDA: the installer has no CUDA DLL. `build.rs` delay-loads them (`/DELAYLOAD`); `gpu.rs` has the delay-load hooks: they load the pack DLLs from `gpu::app_dir()` (the first load comes before `main`), else stubs. A new static import of a CUDA DLL stops the app on PCs without one; the test `cuda_dlls_are_delay_loaded` checks this. A CUDA out-of-memory error ends the process. By the decision of 2026-11-09 the app does not check free GPU memory: `gpu::place` puts the translation model and Fun-ASR on the chosen GPU, and the user accepts the risk. Do not add a memory check without a new decision.
 - macOS: minimum 14.2 (Core Audio tap API); system audio is gated at 14.6 at run time. `build.rs` links libclang_rt.osx for llama.cpp Metal.
 - Linux is dev-only: onnxruntime + llama.cpp in one process abort on Linux (std::regex clash). Run model tests on Windows/macOS CI (job `e2e`).
 - GitHub release downloads in CI must send the job token (unauthenticated requests got 504 on 2026-11-08); see `.github/actions/sherpa-libs`.

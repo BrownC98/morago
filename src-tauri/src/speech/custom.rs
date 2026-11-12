@@ -149,7 +149,7 @@ pub fn language_code(name: &str) -> Option<String> {
     None
 }
 
-/// Whisper language names and ISO 639-1 codes (also used by local Whisper).
+/// Whisper language names and ISO 639-1 codes (OpenAI-compatible services).
 const LANGUAGES: &[(&str, &str)] = &[
     ("english", "en"),
     ("chinese", "zh"),

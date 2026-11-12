@@ -1003,8 +1003,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                   Parakeet 일본어: NVIDIA parakeet-tdt_ctc-0.6b-ja, CC BY 4.0
                   (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX int8 by k2-fsa (sherpa-onnx)
                 </li>
-                <li translate="no">Whisper (OpenAI): MIT License</li>
-                <li translate="no">whisper.cpp, ggml (The ggml authors): MIT License</li>
+                <li translate="no">ggml (The ggml authors): MIT License</li>
                 <li translate="no">transcribe.cpp (handy-computer): MIT License</li>
                 <li>
                   로컬 번역은 Google DeepMind의 Gemma 4를 씁니다. Apache License 2.0

@@ -139,7 +139,7 @@ pub struct Placements {
     pub asr: Option<Placement>,
 }
 
-/// The translation model, Whisper and Fun-ASR go on the device of `place`
+/// The translation model and Fun-ASR go on the device of `place`
 /// (the GPU setting, no memory check); the sherpa-onnx models on the CPU.
 fn place_with(
     settings: &Settings,
@@ -150,12 +150,7 @@ fn place_with(
         TranslateConfig::Custom { .. } => None,
     };
     let asr = match &settings.asr {
-        AsrConfig::Local { model_id }
-            if model_id.starts_with(models::WHISPER_ID_PREFIX)
-                || model_id == models::FUN_ASR_MLT_ID =>
-        {
-            Some(place()?)
-        }
+        AsrConfig::Local { model_id } if model_id == models::FUN_ASR_MLT_ID => Some(place()?),
         AsrConfig::Local { .. } => Some(Placement::cpu("이 모델은 CPU에서만 돌립니다.")),
         AsrConfig::Custom { .. } => None,
     };
@@ -1087,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn translation_whisper_and_fun_asr_follow_the_gpu_setting() {
+    fn translation_and_fun_asr_follow_the_gpu_setting() {
         let gpu = || {
             Ok(Placement {
                 gpu: Some((0, "GPU".into())),
@@ -1097,11 +1092,9 @@ mod tests {
                 },
             })
         };
-        for id in ["whisper-turbo", models::FUN_ASR_MLT_ID] {
-            let p = place_with(&local_settings(id), &gpu).unwrap();
-            assert!(p.translate.unwrap().status.gpu, "{id}");
-            assert!(p.asr.unwrap().status.gpu, "{id}");
-        }
+        let p = place_with(&local_settings(models::FUN_ASR_MLT_ID), &gpu).unwrap();
+        assert!(p.translate.unwrap().status.gpu);
+        assert!(p.asr.unwrap().status.gpu);
         let p = place_with(&local_settings(models::QWEN3_ASR_ID), &gpu).unwrap();
         assert!(!p.asr.unwrap().status.gpu);
     }
@@ -1110,7 +1103,7 @@ mod tests {
     fn device_rows_of_the_local_models() {
         let off = Settings {
             gpu: GpuSetting::Off,
-            ..local_settings("whisper-small")
+            ..local_settings(models::FUN_ASR_MLT_ID)
         };
         let p = model_devices(&off);
         for device in [p.translate.unwrap().status, p.asr.unwrap().status] {
@@ -1126,7 +1119,7 @@ mod tests {
             gpu: GpuSetting::Device {
                 name: "No Such GPU 9000".into(),
             },
-            ..local_settings("whisper-small")
+            ..local_settings(models::FUN_ASR_MLT_ID)
         };
         let p = model_devices(&missing);
         assert!(p.asr.unwrap().status.detail.contains("No Such GPU 9000"));

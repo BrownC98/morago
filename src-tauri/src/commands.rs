@@ -73,6 +73,7 @@ impl AppState {
             .join("morago")
             .join("sessions");
         let settings = settings::load(&settings_path)?;
+        models::remove_retired(&models_dir);
         Ok(Self {
             settings_path,
             models_dir,

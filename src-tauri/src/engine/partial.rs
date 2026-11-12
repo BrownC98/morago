@@ -30,7 +30,6 @@ const OFFER_STEP_MS: u64 = 700;
 /// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 on the CPU (2 s per run at 6 s of audio).
 /// - Fun-ASR-MLT-Nano: on a GPU only. 10 s of audio: 0.32 to 0.41 s on CUDA,
 ///   1.8 to 2.2 s on the CPU.
-/// - Whisper: no, RTF 0.35 on the CPU (whisper.cpp): the CPU would never rest.
 /// - Custom: no, API cost.
 pub(super) fn enabled(asr: &AsrConfig, on_gpu: bool) -> bool {
     match asr {
@@ -489,15 +488,8 @@ mod tests {
         assert!(enabled(&local(models::PARAKEET_JA_ID), false));
         assert!(enabled(&local(models::FUN_ASR_MLT_ID), true));
         assert!(!enabled(&local(models::FUN_ASR_MLT_ID), false));
-        for id in [
-            models::QWEN3_ASR_ID,
-            "whisper-base",
-            "whisper-small",
-            "whisper-turbo",
-        ] {
-            for on_gpu in [false, true] {
-                assert!(!enabled(&local(id), on_gpu), "{id}");
-            }
+        for on_gpu in [false, true] {
+            assert!(!enabled(&local(models::QWEN3_ASR_ID), on_gpu));
         }
         let custom = AsrConfig::Custom {
             endpoint: crate::types::Endpoint {

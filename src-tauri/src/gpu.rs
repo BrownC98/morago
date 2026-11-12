@@ -1,5 +1,5 @@
-//! GPU use for the local models: translation (llama.cpp), Whisper
-//! (whisper.cpp) and Fun-ASR (transcribe.cpp). All run on the one ggml of
+//! GPU use for the local models: translation (llama.cpp) and Fun-ASR
+//! (transcribe.cpp). Both run on the one ggml of
 //! llama.cpp, so they share its GPU backend, the pack and this placement.
 //! - Windows: CUDA on NVIDIA GPUs. The CUDA runtime DLLs are not in the
 //!   installer: the "GPU 구성 요소" pack downloads them from NVIDIA on demand
@@ -200,30 +200,23 @@ fn unpack(
     Ok(())
 }
 
-unsafe extern "C" {
-    /// whisper.cpp (vendor/whisper-rs-sys). It sets the ggml log too, and each
-    /// Whisper context sets the ggml log again to this callback.
-    fn whisper_log_set(callback: llama_cpp_sys_2::ggml_log_callback, user_data: *mut c_void);
-}
-
 /// llama.cpp allows one backend per process. The log of llama.cpp,
-/// whisper.cpp, transcribe.cpp and ggml goes to `log`; the last error lines
-/// give the cause of a failure (`failure_cause`). Call it before the first
-/// Whisper context or Fun-ASR model.
+/// transcribe.cpp and ggml goes to `log`; the last error lines give the cause
+/// of a failure (`failure_cause`). Call it before the first Fun-ASR model.
 pub fn llama_backend() -> anyhow::Result<&'static LlamaBackend> {
     static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
     BACKEND
         .get_or_init(|| {
             let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
             // SAFETY: the callbacks are valid for the life of the process.
-            // transcribe_log_set also sets the ggml log: the others come after it.
+            // transcribe_log_set also sets the ggml log; llama_log_set comes
+            // after it and sets the ggml log to `on_log`.
             unsafe {
                 transcribe_cpp::sys::transcribe_log_set(
                     Some(on_transcribe_log),
                     std::ptr::null_mut(),
                 );
                 llama_cpp_sys_2::llama_log_set(Some(on_log), std::ptr::null_mut());
-                whisper_log_set(Some(on_log), std::ptr::null_mut());
             }
             Ok(backend)
         })
@@ -434,20 +427,6 @@ pub fn lowest_free_while<T>(index: Option<usize>, f: impl FnOnce() -> T) -> (T, 
     (out, Some(lowest.load(Ordering::Relaxed)))
 }
 
-/// whisper.cpp numbers only the GPU devices of ggml (`gpu_device`).
-pub fn gpu_ordinal(index: usize) -> i32 {
-    list_llama_ggml_backend_devices()
-        .iter()
-        .filter(|d| {
-            d.index < index
-                && matches!(
-                    d.device_type,
-                    LlamaBackendDeviceType::Gpu | LlamaBackendDeviceType::IntegratedGpu
-                )
-        })
-        .count() as i32
-}
-
 const MIB: u64 = 1024 * 1024;
 
 fn gb(bytes: u64) -> String {
@@ -474,7 +453,7 @@ impl Placement {
     }
 }
 
-/// Picks the device of a local model (translation, Whisper, Fun-ASR): the
+/// Picks the device of a local model (translation, Fun-ASR): the
 /// chosen GPU, else the CPU with the reason. No memory check: a CUDA
 /// out-of-memory error ends the process. An error (the chosen GPU is not on
 /// this PC) stops the meeting start (D2 B).
