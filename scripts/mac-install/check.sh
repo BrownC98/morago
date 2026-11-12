@@ -44,6 +44,15 @@ wait_for() { # <pattern> <seconds> [gone]
 }
 press() { ax press "$(pid)" "$@"; }
 
+echo "== sound device"
+# The runner has no sound device. BlackHole is a loopback device: what plays
+# on its output comes in on its input, so `afplay` is the meeting's speech.
+brew install --cask blackhole-2ch >"$out/blackhole.txt" 2>&1 || tail -20 "$out/blackhole.txt"
+sudo killall coreaudiod 2>/dev/null || sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
+sleep 5
+system_profiler SPAudioDataType 2>&1 | tee "$out/audio-devices.txt"
+grep -q BlackHole "$out/audio-devices.txt" && res sound-device info "BlackHole 2ch is the input and output device" || res sound-device info "no loopback device: a meeting gets no sound"
+
 echo "== 1. install"
 dmg="$out/morago.dmg"
 url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$tag" | jq -r '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url')
@@ -87,30 +96,130 @@ if [ -n "$(pid)" ] && tmo 30 "$out/ax" dump "$(pid)" | grep -q AXWindow; then
   pkill -x morago; sleep 3
 else
   res gatekeeper info "macOS did not start the quarantined app: $(grep -E 'AXStaticText' "$out/gatekeeper-dialog.txt" | sed 's/.*|//' | tr '\n' ' ' | cut -c1-300)"
-  pkill -x morago; pkill -x open; pkill -x CoreServicesUIAgent; sleep 3
+  pkill -x morago; pkill -x open
+  ax press "$(pgrep -x CoreServicesUIAgent | head -1)" AXButton "=Done"; sleep 3
 fi
 # What "Open Anyway" in System Settings does: it takes the mark off.
 xattr -dr com.apple.quarantine "$app"
 
 echo "== 2. start"
-tmo 60 open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"
+launch() { tmo 60 open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"; }
+launch
 sleep 10
+ax fit "$(pid)" 1024 700
 shot 2-start-10s
 sleep 50
 shot 2-start-60s
 if [ -n "$(pid)" ] && [ -z "$(crashes)" ]; then res start pass "runs after 60 s, no crash report"; else res start fail "pid='$(pid)' crash reports: $(crashes)"; fi
-ax dump "$(pid)" >"$out/ax-start.txt" 2>&1
-wc -l "$out/ax-start.txt"; cat "$out/ax-start.txt"
 
-echo "== probes"
+echo "== 3. use"
+# Permission dialogs of macOS (microphone, system audio, Documents folder):
+# keep a picture and the text of each, then press Allow as a user does.
+(
+  n=0
+  while sleep 3; do
+    for p in UserNotificationCenter CoreServicesUIAgent; do
+      for q in $(pgrep -x $p); do
+        d=$(tmo 30 "$out/ax" dump "$q" 2>/dev/null)
+        b=$(grep -oE 'AXButton\|[^|]*\|on\|(Allow|OK|허용|확인)$' <<<"$d" | head -1) || continue
+        n=$((n + 1)); shot "prompt-$n"
+        { echo "-- prompt $n ($p)"; echo "$d"; } >>"$out/prompts.txt"
+        tmo 30 "$out/ax" press "$q" AXButton "=${b##*|}" >>"$out/prompts.txt" 2>&1
+      done
+    done
+  done
+) &
+prompts=$!
+step() { # <check> <seconds> <pattern that must show> [gone]: result line + tree + picture
+  if wait_for "$3" "$2" "${4:-}"; then res "$1" pass "${5:-window shows: $3 ${4:-}}"; else res "$1" fail "window: no '$3' ${4:-} in $2 s"; fi
+  ax dump "$(pid)" >"$out/ax-$1.txt" 2>&1; shot "3-$1"
+}
+step ui-tree 60 'AXWebArea'
+cat "$out/ax-ui-tree.txt"
+
+# Models: the two notices on the meeting tab lead to the settings tab.
+press AXButton "설정에서 내려받기"
+step settings-tab 20 'SenseVoice Small 내려받기'
+press AXButton "SenseVoice Small 내려받기"
+press AXButton "Gemma 4 E2B 내려받기"
+sleep 5; shot 3-downloading
+t0=$(date +%s)
+step model-download 1800 '(SenseVoice Small|Gemma 4 E2B) 내려받기' gone "both downloads ended in $(( $(date +%s) - t0 )) s"
+models=~/Library/Application\ Support/com.morago.app/models
+find "$models" -type f -exec shasum -a 256 {} + 2>&1 | tee "$out/models.txt"
+bad=0; n=0
+while read -r sha file; do
+  n=$((n + 1)); grep -q "\"$sha\"" "$here/../../src-tauri/src/models.rs" || { bad=1; echo "no pin for $file"; }
+done <"$out/models.txt"
+[ $n -ge 3 ] && [ $bad = 0 ] && res model-sha pass "$n files match the SHA-256 pins of models.rs" || res model-sha fail "$n files, mismatch=$bad"
+
+# Meeting with the recording on.
+press AXRadioButton "=회의" || press '*' "=회의"
+step meeting-tab 20 '회의 시작'
+grep -E 'AXCheckBox|회의 시작' "$out/ax-meeting-tab.txt"
+press AXCheckBox "녹음"
+sleep 2
+settings=~/Library/Application\ Support/com.morago.app/settings.json
+cat "$settings" | tee "$out/settings.json"; echo
+[ "$(jq -r .record_audio "$settings")" = true ] && res settings-save pass "the 녹음 switch wrote record_audio=true to settings.json" || res settings-save fail "settings.json has no record_audio=true"
+press AXButton "회의 시작"
+step meeting-start 240 '중지하고 저장'
+mkdir -p "$out/wavs"
+hf=https://huggingface.co/csukuangfj
+curl -fsSL --retry 5 -o "$out/wavs/en.wav" $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
+curl -fsSL --retry 5 -o "$out/wavs/ja.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
+for w in en ja; do afplay "$out/wavs/$w.wav" 2>&1; sleep 4; done
+rm -rf "$out/wavs"
+shot 3-meeting-after-speech
+# Until a translation is in the session file (the model loads at the first one).
+for ((i = 0; i < 300; i += 5)); do
+  grep -qs '"state":"done"' ~/Documents/morago/sessions/*/utterances.jsonl && break
+  sleep 5
+done
+sleep 20
+ax dump "$(pid)" >"$out/ax-meeting.txt" 2>&1; shot 3-meeting
+sed -n '/발화 목록/,$p' "$out/ax-meeting.txt" | grep AXStaticText | sed 's/.*|//' | tee "$out/meeting-text.txt"
+press AXButton "중지하고 저장"
+step meeting-stop 180 '회의 시작'
+
+sessions=~/Documents/morago/sessions
+find "$sessions" -type f -exec ls -l {} + 2>&1 | tee "$out/session-files.txt"
+dir=$(ls -d "$sessions"/*/ 2>/dev/null | head -1)
+cp "$dir"/meta.json "$dir"/utterances.jsonl "$out/" 2>/dev/null
+u=$(wc -l <"$dir/utterances.jsonl" 2>/dev/null | tr -d ' ')
+[ "${u:-0}" -ge 1 ] && res session-save pass "meta.json and utterances.jsonl with $u lines" || res session-save fail "no utterance in $dir"
+jq -r 'select(.translation.state == "done") | .translation.text' "$dir/utterances.jsonl" 2>/dev/null | grep -q '[가-힣]' && res translation pass "utterances have a Korean translation" || res translation fail "no Korean translation in utterances.jsonl"
+afinfo "$dir/audio.wav" 2>&1 | tee "$out/audio-wav.txt"
+grep -q '1 ch,  16000 Hz' "$out/audio-wav.txt" && [ "$(stat -f %z "$dir/audio.wav")" -gt 320000 ] && res recording pass "audio.wav: mono 16 kHz, $(stat -f %z "$dir/audio.wav") bytes" || res recording fail "audio.wav is missing, short or not mono 16 kHz"
+
+# Records tab: the saved meeting, its player, the folder button.
+press AXRadioButton "=기록" || press '*' "=기록"
+step records-tab 20 '폴더 열기'
+grep -q '회의 녹음' "$out/ax-records-tab.txt" && res records-player pass "the records tab shows the recording player" || res records-player fail "no player (회의 녹음) on the records tab"
+press AXButton "폴더 열기"
+sleep 5; shot 3-folder-open
+f=$(osascript -e 'tell application "Finder" to get POSIX path of (target of front window as alias)' 2>&1)
+case "$f" in "$sessions"*) res folder-open pass "Finder shows $f" ;; *) res folder-open fail "Finder front window: $f" ;; esac
+
+# Quit as a user does, start again: the settings and the record stay.
+press AXMenuItem "Quit morago"
+sleep 8
+[ -z "$(pid)" ] && res quit pass "the app ends on Quit" || { res quit fail "the app still runs 8 s after Quit"; pkill -x morago; sleep 3; }
+launch
+step restart 60 '회의 시작'
+grep -E 'AXCheckBox' "$out/ax-restart.txt"
+grep -qE 'AXCheckBox.*녹음.*1$|AXCheckBox.*1.*녹음' "$out/ax-restart.txt" && res settings-kept pass "the 녹음 switch is still on after a restart" || res settings-kept fail "the 녹음 switch is off after a restart"
+kill $prompts 2>/dev/null
+[ -f "$out/prompts.txt" ] && res prompts info "$(grep -c '^-- prompt' "$out/prompts.txt") macOS permission dialogs; see prompts.txt" || res prompts info "macOS showed no permission dialog"
+
+echo "== end"
 {
-  echo "-- TCC user db"; sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" 'select service, client, auth_value from access' 2>&1
-  echo "-- TCC system db"; sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" 'select service, client, auth_value from access' 2>&1
-  echo "-- app files"; ls -la ~/Library/Application\ Support/com.morago.app ~/Library/Logs/com.morago.app ~/Documents/morago 2>&1
+  echo "-- TCC user db"; sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "select service, client, auth_value from access where client like '%morago%'" 2>&1
+  echo "-- app files"; ls -la ~/Library/Application\ Support/com.morago.app ~/Documents/morago 2>&1
 } | tee "$out/probes.txt"
-
-pkill -x morago
-cat "$out/app.log" 2>/dev/null | tail -100
-crashes
+pkill -x morago; sleep 2
+[ -z "$(crashes)" ] && res crash-reports pass "no crash report of morago" || { res crash-reports fail "$(crashes)"; cp ~/Library/Logs/DiagnosticReports/*orago* "$out/" 2>/dev/null; }
+grep -vE '^ggml_metal_library_compile_all' "$out/app.log" | tail -150
+cat "$out/results.tsv"
 rm -f "$out/ax"
 exit $fail
