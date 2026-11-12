@@ -50,8 +50,10 @@ echo "== sound device"
 brew install --cask blackhole-2ch >"$out/blackhole.txt" 2>&1 || tail -20 "$out/blackhole.txt"
 sudo killall coreaudiod 2>/dev/null || sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 sleep 5
+brew install switchaudio-osx >>"$out/blackhole.txt" 2>&1
+SwitchAudioSource -t input -s "BlackHole 2ch"; SwitchAudioSource -t output -s "BlackHole 2ch"
 system_profiler SPAudioDataType 2>&1 | tee "$out/audio-devices.txt"
-grep -q BlackHole "$out/audio-devices.txt" && res sound-device info "BlackHole 2ch is the input and output device" || res sound-device info "no loopback device: a meeting gets no sound"
+[ "$(SwitchAudioSource -c -t input)$(SwitchAudioSource -c -t output)" = "BlackHole 2chBlackHole 2ch" ] && res sound-device info "BlackHole 2ch is the default input and output device" || res sound-device info "no loopback device: a meeting gets no sound"
 
 echo "== 1. install"
 dmg="$out/morago.dmg"
@@ -144,7 +146,11 @@ press AXButton "SenseVoice Small 내려받기"
 press AXButton "Gemma 4 E2B 내려받기"
 sleep 5; shot 3-downloading
 t0=$(date +%s)
-step model-download 1800 '(SenseVoice Small|Gemma 4 E2B) 내려받기' gone "both downloads ended in $(( $(date +%s) - t0 )) s"
+step model-download 1800 '(SenseVoice Small|Gemma 4 E2B) 내려받기' gone
+res model-download-time info "SenseVoice Small and Gemma 4 E2B in $(( $(date +%s) - t0 )) s"
+# The updater asks the real release manifest.
+press AXButton "업데이트 확인"
+step update-check 60 '최신 버전입니다'
 models=~/Library/Application\ Support/com.morago.app/models
 find "$models" -type f -exec shasum -a 256 {} + 2>&1 | tee "$out/models.txt"
 bad=0; n=0
@@ -157,7 +163,7 @@ done <"$out/models.txt"
 press AXRadioButton "=회의" || press '*' "=회의"
 step meeting-tab 20 '회의 시작'
 grep -E 'AXCheckBox|회의 시작' "$out/ax-meeting-tab.txt"
-press AXCheckBox "녹음"
+press AXCheckBox "WAV 파일로 저장"
 sleep 2
 settings=~/Library/Application\ Support/com.morago.app/settings.json
 cat "$settings" | tee "$out/settings.json"; echo
@@ -196,6 +202,21 @@ grep -q '1 ch,  16000 Hz' "$out/audio-wav.txt" && [ "$(stat -f %z "$dir/audio.wa
 press AXRadioButton "=기록" || press '*' "=기록"
 step records-tab 20 '폴더 열기'
 grep -q '회의 녹음' "$out/ax-records-tab.txt" && res records-player pass "the records tab shows the recording player" || res records-player fail "no player (회의 녹음) on the records tab"
+# Export: the save dialog of macOS, with its default folder and name.
+touch "$out/.before-export"
+for b in "=Markdown" "녹음(WAV)"; do
+  press AXButton "$b"
+  wait_for 'AXButton.*\|Save$' 20 || res export fail "no save dialog for $b"
+  shot "3-export-$(tr -dc 'A-Za-z' <<<"$b")"
+  press AXButton "=Save"
+  wait_for '내보냈습니다' 30 || res export fail "no '내보냈습니다' after Save for $b"
+  press AXButton "알림 닫기"; sleep 1
+done
+find ~/Documents ~/Desktop ~/Downloads -maxdepth 2 -newer "$out/.before-export" -type f \( -name '*.md' -o -name '*.wav' \) -not -path '*/sessions/*' -exec ls -l {} + 2>/dev/null | tee "$out/export-files.txt"
+md=$(grep -o '/.*\.md$' "$out/export-files.txt" | head -1); wav=$(grep -o '/.*\.wav$' "$out/export-files.txt" | head -1)
+[ -n "$md" ] && cp "$md" "$out/export.md"
+[ -s "$md" ] && grep -q '[가-힣]' "$md" && res export-markdown pass "$md" || res export-markdown fail "no Markdown file"
+[ -n "$wav" ] && cmp -s "$wav" "$dir/audio.wav" && res export-audio pass "$wav equals audio.wav" || res export-audio fail "no WAV file equal to audio.wav"
 press AXButton "폴더 열기"
 sleep 5; shot 3-folder-open
 f=$(osascript -e 'tell application "Finder" to get POSIX path of (target of front window as alias)' 2>&1)
@@ -208,7 +229,7 @@ sleep 8
 launch
 step restart 60 '회의 시작'
 grep -E 'AXCheckBox' "$out/ax-restart.txt"
-grep -qE 'AXCheckBox.*녹음.*1$|AXCheckBox.*1.*녹음' "$out/ax-restart.txt" && res settings-kept pass "the 녹음 switch is still on after a restart" || res settings-kept fail "the 녹음 switch is off after a restart"
+grep -qE 'AXCheckBox.*WAV 파일로 저장.* 1$' "$out/ax-restart.txt" && res settings-kept pass "the 녹음 switch is still on after a restart" || res settings-kept fail "the 녹음 switch is off after a restart"
 kill $prompts 2>/dev/null
 [ -f "$out/prompts.txt" ] && res prompts info "$(grep -c '^-- prompt' "$out/prompts.txt") macOS permission dialogs; see prompts.txt" || res prompts info "macOS showed no permission dialog"
 
