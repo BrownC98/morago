@@ -143,6 +143,9 @@ pub struct Settings {
     pub live_partials: bool,
     pub capture_mic: bool,
     pub capture_system: bool,
+    /// Save the meeting audio as `audio.wav` with the session (default off).
+    /// Read at session start.
+    pub record_audio: bool,
     /// `None` = default input device.
     pub mic_device: Option<String>,
     /// `None` = `<documents>/morago/sessions`.
@@ -167,6 +170,7 @@ impl Default for Settings {
             live_partials: true,
             capture_mic: true,
             capture_system: true,
+            record_audio: false,
             mic_device: None,
             sessions_dir: None,
             gpu: GpuSetting::Auto,
@@ -292,6 +296,7 @@ mod tests {
             live_partials: false,
             capture_mic: true,
             capture_system: false,
+            record_audio: true,
             mic_device: Some("USB 마이크".into()),
             sessions_dir: Some(PathBuf::from("/tmp/세션")),
             gpu: GpuSetting::Device {
@@ -594,6 +599,8 @@ mod tests {
         assert_eq!(s.gpu, GpuSetting::Auto);
         // A file from before the live partials setting: on.
         assert!(s.live_partials);
+        // A file from before the recording setting: off.
+        assert!(!s.record_audio);
     }
 
     #[test]

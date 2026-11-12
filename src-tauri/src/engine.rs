@@ -5,7 +5,8 @@
 use crate::gpu::{self, GpuFailure, Placement};
 use crate::settings::{AsrConfig, Settings, TranslateConfig};
 use crate::speech::{self, Diarizer, Vad};
-use crate::store::{SessionStore, SessionWriter};
+use crate::store::audio::AudioFile;
+use crate::store::{AudioRecorder, SessionStore, SessionWriter};
 use crate::translate::{self, needs_translation};
 use crate::types::{
     AudioChunk, ModelDevice, PartialText, SessionMeta, SessionSummary, SourceKind, SpeechSegment,
@@ -237,6 +238,15 @@ fn start_pipeline(
         speaker_names: Default::default(),
     };
     let writer = Arc::new(Mutex::new(Some(store.create(&meta)?)));
+    // A recording that cannot start does not stop the meeting.
+    let recorder = if settings.record_audio {
+        store
+            .create_audio(&meta.id)
+            .map_err(|e| sink.error("store", None, &format!("녹음을 시작하지 못했습니다: {e:#}")))
+            .ok()
+    } else {
+        None
+    };
     let target_language = Arc::new(RwLock::new(settings.target_language.clone()));
 
     let (audio_tx, audio_rx) = bounded::<AudioChunk>(512);
@@ -262,7 +272,7 @@ fn start_pipeline(
     {
         let sink = Arc::clone(sink);
         threads.push(std::thread::spawn(move || {
-            vad_loop(audio_rx, vads, seg_tx, sink, feed)
+            vad_loop(audio_rx, vads, seg_tx, sink, feed, recorder)
         }));
     }
     {
@@ -524,12 +534,40 @@ fn utterance_ms(u: &Utterance) -> u64 {
     u.end_ms.saturating_sub(u.start_ms)
 }
 
+/// Writes a chunk to the recording. A write error (a full disk) ends the
+/// recording only and tells the user once; the meeting and its text go on.
+fn record<F: AudioFile>(
+    recorder: &mut Option<AudioRecorder<F>>,
+    chunk: &AudioChunk,
+    sink: &dyn Sink,
+) {
+    if let Some(r) = recorder.as_mut()
+        && let Err(e) = r.push(chunk)
+    {
+        *recorder = None;
+        recording_stopped(sink, &e);
+    }
+}
+
+fn recording_stopped(sink: &dyn Sink, e: &std::io::Error) {
+    sink.error(
+        "store",
+        None,
+        &format!(
+            "녹음을 멈췄습니다: {e}. 디스크 공간과 권한을 확인하세요. 발화 기록은 계속 저장합니다."
+        ),
+    );
+}
+
+/// `recorder`: the meeting recording; it gets every chunk before the VAD and
+/// is closed when `rx` ends.
 fn vad_loop(
     rx: Receiver<AudioChunk>,
     mut vads: Vec<(SourceKind, Vad)>,
     tx: Backlog<SpeechSegment>,
     sink: Arc<dyn Sink>,
     mut feed: Option<partial::Feed>,
+    mut recorder: Option<AudioRecorder>,
 ) {
     let mut warning = DropWarning::new(
         "notice",
@@ -548,6 +586,7 @@ fn vad_loop(
     };
     let mut last_level = [Instant::now(), Instant::now()];
     for chunk in rx.iter() {
+        record(&mut recorder, &chunk, sink.as_ref());
         let i = chunk.source as usize;
         if last_level[i].elapsed() >= Duration::from_millis(100) {
             last_level[i] = Instant::now();
@@ -564,6 +603,11 @@ fn vad_loop(
                 f.offer(&chunk, || vad.open_speech());
             }
         }
+    }
+    if let Some(r) = recorder.take()
+        && let Err(e) = r.finish()
+    {
+        recording_stopped(sink.as_ref(), &e);
     }
     for (_, vad) in vads.iter_mut() {
         for seg in vad.flush() {
@@ -931,6 +975,79 @@ mod tests {
         assert_eq!(events[3].original, "hello 4");
     }
 
+    /// 100 ms chunks of both sources, `secs` long, as captures send them.
+    fn two_source_chunks(secs: u64) -> Vec<AudioChunk> {
+        let mut chunks = Vec::new();
+        for ms in (0..secs * 1000).step_by(100) {
+            for source in [SourceKind::Mic, SourceKind::System] {
+                chunks.push(AudioChunk {
+                    source,
+                    start_ms: ms,
+                    samples: vec![0.1; 1600],
+                });
+            }
+        }
+        chunks
+    }
+
+    fn test_meta(id: &str) -> SessionMeta {
+        SessionMeta {
+            id: id.into(),
+            title: "녹음".into(),
+            started_at: "2026-11-12T10:00:00+09:00".into(),
+            ended_at: None,
+            target_language: "ko".into(),
+            asr_label: String::new(),
+            translator_label: String::new(),
+            speaker_names: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_vad_stage_records_the_meeting() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        let id = "20261112-100000-ab12";
+        let _writer = store.create(&test_meta(id)).unwrap();
+        let recorder = Arc::new(Recorder::default());
+        let (audio_tx, audio_rx) = unbounded();
+        for c in two_source_chunks(3) {
+            audio_tx.send(c).unwrap();
+        }
+        drop(audio_tx);
+        let (seg_tx, _seg_rx) = backlog(BACKLOG_LIMIT_MS, segment_ms);
+        vad_loop(
+            audio_rx,
+            Vec::new(),
+            seg_tx,
+            recorder.clone(),
+            None,
+            Some(store.create_audio(id).unwrap()),
+        );
+        assert!(recorder.errors.lock().unwrap().is_empty());
+        let path = store.audio(id).unwrap().unwrap();
+        let mut wav = hound::WavReader::open(path).unwrap();
+        assert_eq!(wav.len(), 48_000);
+        let two = (0.2f32 * 32767.0).round() as i16;
+        assert!(wav.samples::<i16>().all(|s| s.unwrap() == two));
+    }
+
+    #[test]
+    fn a_full_disk_stops_the_recording_once() {
+        let recorder = Recorder::default();
+        let mut audio = Some(AudioRecorder::full_disk(44 + 40_000));
+        for c in two_source_chunks(5) {
+            record(&mut audio, &c, &recorder);
+        }
+        assert!(audio.is_none());
+        let errors = recorder.errors.lock().unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("store: 녹음을 멈췄습니다: disk full."),
+            "{errors:?}"
+        );
+    }
+
     /// Fails with a GPU failure at the second call.
     struct BrokenGpuAsr {
         calls: Arc<AtomicU64>,
@@ -1278,7 +1395,8 @@ mod tests {
     fn pipeline_end_to_end() {
         log_partials();
         let models_dir = models_dir();
-        let settings = e2e_settings(&models_dir);
+        let mut settings = e2e_settings(&models_dir);
+        settings.record_audio = true;
         let root = tempfile::tempdir().unwrap();
         let store = SessionStore::new(root.path());
         let recorder = Arc::new(Recorder::default());
@@ -1302,8 +1420,17 @@ mod tests {
             p.translate_device,
             free_gpu_mib()
         );
-        feed_in_real_time(&p, &e2e_chunks());
+        let chunks = e2e_chunks();
+        feed_in_real_time(&p, &chunks);
         let (summary, meta, utterances) = finish(p, root.path(), &store);
+        // The recording has the whole timeline of both sources.
+        let audio_len = chunks
+            .iter()
+            .map(|c| c.start_ms * 16 + c.samples.len() as u64)
+            .max()
+            .unwrap();
+        let wav = hound::WavReader::open(store.audio(&meta.id).unwrap().unwrap()).unwrap();
+        assert_eq!(u64::from(wav.len()), audio_len);
         for u in &utterances {
             println!(
                 "{:>6}-{:>6} ms {:?} {} {:?}: {} => {:?}",

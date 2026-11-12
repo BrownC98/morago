@@ -2,7 +2,7 @@
 // The types copy the serde JSON of src-tauri/src/{types,settings,models,secrets}.rs.
 // In a plain browser (no Tauri) the calls go to the in-memory mock in mock.ts.
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 
@@ -104,6 +104,8 @@ export interface Settings {
   live_partials: boolean;
   capture_mic: boolean;
   capture_system: boolean;
+  /** Save the meeting audio (`audio.wav`) with the session; default off; read at session start. */
+  record_audio: boolean;
   mic_device: string | null;
   sessions_dir: string | null;
   gpu: GpuSetting;
@@ -220,6 +222,11 @@ export async function appVersion(): Promise<string> {
   return getVersion();
 }
 
+/** URL of a recording for an <audio> element (Tauri asset protocol). */
+export function audioSrc(path: string): string {
+  return convertFileSrc(path);
+}
+
 export const api = {
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<void>("save_settings", { settings }),
@@ -242,12 +249,20 @@ export const api = {
   startSession: (title: string | null) => call<SessionMeta>("start_session", { title }),
   stopSession: () => call<SessionSummary>("stop_session"),
   listSessions: () => call<SessionSummary[]>("list_sessions"),
+  /** `audio`: absolute path of the recording for `convertFileSrc`; null if none or the session runs. */
   loadSession: (id: string) =>
-    call<{ meta: SessionMeta; utterances: Utterance[] }>("load_session", { id }),
+    call<{ meta: SessionMeta; utterances: Utterance[]; audio: string | null }>("load_session", {
+      id,
+    }),
   updateSessionMeta: (meta: SessionMeta) => call<void>("update_session_meta", { meta }),
   deleteSession: (id: string) => call<void>("delete_session", { id }),
   exportSession: (id: string, format: ExportFormat, path: string) =>
     call<void>("export_session", { id, format, path }),
+  /** Copies the recording (WAV) to `path`; rejects if the session has none. */
+  exportSessionAudio: (id: string, path: string) =>
+    call<void>("export_session_audio", { id, path }),
+  /** Opens the folder of the session files and recordings in Explorer or Finder. */
+  openSessionsDir: () => call<void>("open_sessions_dir"),
   gpuStatus: () => call<GpuStatus>("gpu_status"),
   restartApp: () => call<void>("restart_app"),
 };

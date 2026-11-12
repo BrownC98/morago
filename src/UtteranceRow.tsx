@@ -1,16 +1,20 @@
 import { memo } from "react";
 import type { PartialText, Utterance } from "./api";
 import { clock, range, sourceLabel, speakerLabel, speakerSlot } from "./format";
+import { Icon } from "./ui";
 
 /** One utterance: speaker, source, time, original on top, translation below (decision D1 = A). */
 export const UtteranceRow = memo(function UtteranceRow({
   u,
   names,
   latest,
+  onSeek,
 }: {
   u: Utterance;
   names: Record<string, string>;
   latest?: boolean;
+  /** Plays the recording from this utterance; the time becomes a button. */
+  onSeek?: (ms: number) => void;
 }) {
   const t = u.translation;
   return (
@@ -20,7 +24,19 @@ export const UtteranceRow = memo(function UtteranceRow({
           {speakerLabel(u.speaker, names)}
         </span>
         <span className="src">{sourceLabel(u.source)}</span>
-        <span className="tm">{range(u)}</span>
+        {onSeek ? (
+          <button
+            type="button"
+            className="tm seek"
+            aria-label={`${range(u)} 녹음 듣기`}
+            onClick={() => onSeek(u.start_ms)}
+          >
+            <Icon name="play" />
+            {range(u)}
+          </button>
+        ) : (
+          <span className="tm">{range(u)}</span>
+        )}
       </div>
       <div className="txt">
         <p className="orig" lang={u.language ?? undefined}>

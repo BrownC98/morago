@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
+  audioSrc,
   errText,
   pickSavePath,
   type ExportFormat,
@@ -32,6 +33,8 @@ const EXPORTS: { format: ExportFormat; label: string; ext: string; filter: strin
 interface Detail {
   meta: SessionMeta;
   utterances: Utterance[];
+  /** Absolute path of the recording, or null. */
+  audio: string | null;
 }
 
 /** Text of a session for the content search. */
@@ -53,6 +56,14 @@ export function RecordsTab({ active }: { active: boolean }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [namingSpeakers, setNamingSpeakers] = useState<Record<string, string> | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const player = useRef<HTMLAudioElement>(null);
+
+  const seek = useCallback((ms: number) => {
+    const a = player.current;
+    if (!a) return;
+    a.currentTime = ms / 1000;
+    void a.play().catch(() => {});
+  }, []);
 
   // The list reloads each time the tab opens or the session list changes.
   useEffect(() => {
@@ -171,9 +182,36 @@ export function RecordsTab({ active }: { active: boolean }) {
     }
   };
 
+  const doExportAudio = async () => {
+    if (!detail) return;
+    try {
+      const path = await pickSavePath(sessionFileName(detail.meta.title, "wav"), "WAV 녹음", "wav");
+      if (!path) return;
+      await api.exportSessionAudio(detail.meta.id, path);
+      notify("info", "녹음을 WAV 파일로 내보냈습니다.");
+    } catch (e) {
+      notify("error", errText(e));
+    }
+  };
+
+  const openFolder = async () => {
+    try {
+      await api.openSessionsDir();
+    } catch (e) {
+      notify("error", errText(e));
+    }
+  };
+
   const doDelete = async () => {
     if (!detail) return;
     setConfirmDelete(false);
+    // Windows: the player must let go of the file before the folder is deleted.
+    const a = player.current;
+    if (a) {
+      a.pause();
+      a.removeAttribute("src");
+      a.load();
+    }
     try {
       await api.deleteSession(detail.meta.id);
       setDetail(null);
@@ -300,6 +338,11 @@ export function RecordsTab({ active }: { active: boolean }) {
                       {x.label}
                     </button>
                   ))}
+                  {current.audio && (
+                    <button type="button" className="ab sm" onClick={() => void doExportAudio()}>
+                      녹음(WAV)
+                    </button>
+                  )}
                 </span>
                 <button type="button" className="ab ghost sm danger" onClick={() => setConfirmDelete(true)}>
                   삭제
@@ -342,9 +385,26 @@ export function RecordsTab({ active }: { active: boolean }) {
                   </div>
                 </form>
               )}
+              {current.audio && (
+                <div className="player">
+                  <audio
+                    key={current.meta.id}
+                    ref={player}
+                    controls
+                    preload="metadata"
+                    src={audioSrc(current.audio)}
+                    aria-label="회의 녹음"
+                  />
+                </div>
+              )}
               <div className="feed" tabIndex={0} aria-label="발화 목록">
                 {current.utterances.map((u) => (
-                  <UtteranceRow key={u.id} u={u} names={current.meta.speaker_names} />
+                  <UtteranceRow
+                    key={u.id}
+                    u={u}
+                    names={current.meta.speaker_names}
+                    onSeek={current.audio ? seek : undefined}
+                  />
                 ))}
                 {current.utterances.length === 0 && <p className="listening">이 회의에는 발화가 없습니다.</p>}
               </div>
@@ -354,13 +414,16 @@ export function RecordsTab({ active }: { active: boolean }) {
       </div>
       <div className="bar">
         <span>저장 위치: {dir}</span>
+        <button type="button" className="ab ghost sm" onClick={() => void openFolder()}>
+          폴더 열기
+        </button>
         <span className="sp" />
         {sessions && <span>회의 {number(sessions.length)}개</span>}
       </div>
       <ConfirmDialog
         open={confirmDelete}
         title="이 회의를 지울까요?"
-        body={`「${current?.meta.title ?? ""}」의 원문, 번역, 화자 기록이 모두 지워지고 되돌릴 수 없습니다.`}
+        body={`「${current?.meta.title ?? ""}」의 원문, 번역, 화자 기록${current?.audio ? "과 녹음" : ""}이 모두 지워지고 되돌릴 수 없습니다.`}
         confirmLabel="지우기"
         onConfirm={() => void doDelete()}
         onCancel={() => setConfirmDelete(false)}
