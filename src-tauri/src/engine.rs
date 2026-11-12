@@ -1530,8 +1530,13 @@ mod tests {
             let config = crate::settings::AsrConfig::Local {
                 model_id: id.into(),
             };
-            let mut asr =
-                speech::build_asr(&config, None, &models_dir, &Placement::cpu("")).unwrap();
+            let mut asr = speech::build_asr(
+                &config,
+                models::only_language(id),
+                &models_dir,
+                &Placement::cpu(""),
+            )
+            .unwrap();
             for secs in [1u64, 2, 4, 6, 10, 15] {
                 let seg = SpeechSegment {
                     source: SourceKind::System,

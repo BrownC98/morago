@@ -25,6 +25,8 @@ const OFFER_STEP_MS: u64 = 700;
 /// speech again every 0.7 s. `on_gpu`: its placement is a GPU. RTF on 1 to
 /// 15 s of audio (Windows, 4 threads, RTX 5060 Laptop, 2026-11-09):
 /// - SenseVoice Small: yes, RTF 0.024 to 0.054 on the CPU.
+/// - Parakeet 일본어: yes, RTF 0.037 to 0.084 on the CPU (10 s of audio: 0.37 s;
+///   2026-11-12, same PC).
 /// - Qwen3-ASR 0.6B: no, RTF 0.29 to 0.62 on the CPU (2 s per run at 6 s of audio).
 /// - Fun-ASR-MLT-Nano: on a GPU only. 10 s of audio: 0.32 to 0.41 s on CUDA,
 ///   1.8 to 2.2 s on the CPU.
@@ -33,7 +35,8 @@ const OFFER_STEP_MS: u64 = 700;
 pub(super) fn enabled(asr: &AsrConfig, on_gpu: bool) -> bool {
     match asr {
         AsrConfig::Local { model_id } => {
-            model_id == models::SENSE_VOICE_ID || (on_gpu && model_id == models::FUN_ASR_MLT_ID)
+            [models::SENSE_VOICE_ID, models::PARAKEET_JA_ID].contains(&model_id.as_str())
+                || (on_gpu && model_id == models::FUN_ASR_MLT_ID)
         }
         AsrConfig::Custom { .. } => false,
     }
@@ -478,11 +481,12 @@ mod tests {
     }
 
     #[test]
-    fn sense_voice_and_fun_asr_on_a_gpu_give_partials() {
+    fn sense_voice_parakeet_and_fun_asr_on_a_gpu_give_partials() {
         let local = |id: &str| AsrConfig::Local {
             model_id: id.into(),
         };
         assert!(enabled(&local(models::SENSE_VOICE_ID), false));
+        assert!(enabled(&local(models::PARAKEET_JA_ID), false));
         assert!(enabled(&local(models::FUN_ASR_MLT_ID), true));
         assert!(!enabled(&local(models::FUN_ASR_MLT_ID), false));
         for id in [

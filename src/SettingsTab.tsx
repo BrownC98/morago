@@ -898,8 +898,8 @@ export function SettingsTab({ active }: { active: boolean }) {
               </Switch>
               <span className="fhint" id="live-partials-hint">
                 말하는 동안 인식 중인 글과 번역을 회색 줄로 먼저 보입니다. 끄면 말이 끝난 뒤에 글과 번역만 보이고 CPU·GPU를
-                덜 씁니다. 다음 회의부터 적용합니다. 로컬 SenseVoice Small과 GPU에서 도는 Fun-ASR-MLT-Nano만 회색 줄을
-                보입니다.
+                덜 씁니다. 다음 회의부터 적용합니다. 로컬 SenseVoice Small, Parakeet 일본어, GPU에서 도는
+                Fun-ASR-MLT-Nano만 회색 줄을 보입니다.
               </span>
             </div>
           </section>
