@@ -27,7 +27,9 @@ echo "== runner"
 
 echo "== ax tool"
 swiftc -O -o "$out/ax" "$here/ax.swift" 2>&1 | tail -5
-ax() { "$out/ax" "$@"; }
+# `open` and a dump of a busy app can wait without end: give each a time limit.
+tmo() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+ax() { tmo 120 "$out/ax" "$@"; }
 ax trusted
 # Lines of the window that match a pattern.
 has() { ax dump "$(pid)" 2>/dev/null | grep -E -- "$1"; }
@@ -71,25 +73,27 @@ xattr -p com.apple.quarantine "$app" >/dev/null 2>&1 && res quarantine info "the
 }
 
 echo "== 1b. first open with the quarantine mark (Gatekeeper)"
-open "$app" 2>&1 | tee "$out/open-quarantined.txt"
-sleep 15
+# `open` did not return in run 43176261368: it waits while macOS holds the app.
+tmo 600 open "$app" >"$out/open-quarantined.txt" 2>&1 &
+sleep 20
 shot 1-open-quarantined
-for p in CoreServicesUIAgent UserNotificationCenter; do
-  q=$(pgrep -x $p | head -1) && { echo "-- $p"; ax dump "$q"; }
+ps -axo pid,stat,etime,comm | grep -E 'morago|CoreServicesUIAgent|UserNotificationCenter|SecurityAgent|open$' | tee "$out/gatekeeper-ps.txt"
+for p in CoreServicesUIAgent UserNotificationCenter SecurityAgent; do
+  for q in $(pgrep -x $p); do echo "-- $p $q"; ax dump "$q"; done
 done >"$out/gatekeeper-dialog.txt" 2>&1
 cat "$out/gatekeeper-dialog.txt"
-if [ -n "$(pid)" ]; then
+if [ -n "$(pid)" ] && tmo 30 "$out/ax" dump "$(pid)" | grep -q AXWindow; then
   res gatekeeper info "the quarantined app started with no dialog (Gatekeeper: $(spctl --status 2>&1))"
   pkill -x morago; sleep 3
 else
   res gatekeeper info "macOS did not start the quarantined app: $(grep -E 'AXStaticText' "$out/gatekeeper-dialog.txt" | sed 's/.*|//' | tr '\n' ' ' | cut -c1-300)"
-  pkill -x CoreServicesUIAgent
+  pkill -x morago; pkill -x open; pkill -x CoreServicesUIAgent; sleep 3
 fi
 # What "Open Anyway" in System Settings does: it takes the mark off.
 xattr -dr com.apple.quarantine "$app"
 
 echo "== 2. start"
-open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed"
+tmo 60 open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"
 sleep 10
 shot 2-start-10s
 sleep 50
