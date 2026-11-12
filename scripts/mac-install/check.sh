@@ -174,6 +174,13 @@ settings=~/Library/Application\ Support/com.morago.app/settings.json
 cat "$settings" | tee "$out/settings.json"; echo
 [ "$(jq -r .record_audio "$settings")" = true ] && res settings-save pass "the 녹음 switch wrote record_audio=true to settings.json" || res settings-save fail "settings.json has no record_audio=true"
 press AXButton "회의 시작"
+# The virtual GPU of the runner can time out while the model loads (run
+# 43190180879); the app then says so and stays ready: start once more.
+if ! wait_for '중지하고 저장' 240 && has '회의를 시작하지 못했습니다' >"$out/meeting-start-error.txt"; then
+  shot 3-meeting-start-error
+  res meeting-start-retry info "$(sed 's/.*|//' "$out/meeting-start-error.txt" | cut -c1-200)"
+  press AXButton "회의 시작"
+fi
 step meeting-start 240 '중지하고 저장'
 mkdir -p "$out/wavs"
 hf=https://huggingface.co/csukuangfj
