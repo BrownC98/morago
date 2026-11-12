@@ -31,8 +31,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use worker::Feeder;
 
-/// Tells the engine about a stop or a recovery of one capture (Korean user message). An empty
-/// message clears the error of that capture.
+/// Tells the engine about a problem of one capture (Korean user message). An empty
+/// message clears the error of that capture (it runs again, or sound came after a silent start).
 pub type ErrorSink = Arc<dyn Fn(String) + Send + Sync>;
 
 /// macOS: first version where system audio can be recorded (Core Audio process tap).
@@ -414,7 +414,8 @@ fn supervise(
                 Ok(running) => {
                     log::info!("audio {source:?}: reopened");
                     current = Some(running);
-                    report(recovered_message(source));
+                    // The capture runs again: clear the stop error (an empty message).
+                    report(String::new());
                 }
                 Err(e) => {
                     log::warn!("audio {source:?}: reopen failed: {e}");
@@ -509,13 +510,6 @@ fn stop_message(source: SourceKind) -> String {
     match source {
         SourceKind::Mic => "마이크 연결이 끊겨 받기가 멈췄습니다. 다시 연결을 시도합니다.".into(),
         SourceKind::System => "재생 장치가 바뀌었거나 연결이 끊겨 시스템 소리 받기가 멈췄습니다. 다시 연결을 시도합니다.".into(),
-    }
-}
-
-fn recovered_message(source: SourceKind) -> String {
-    match source {
-        SourceKind::Mic => "마이크를 다시 받기 시작했습니다.".into(),
-        SourceKind::System => "시스템 소리를 다시 받기 시작했습니다.".into(),
     }
 }
 
@@ -657,11 +651,7 @@ mod tests {
     #[test]
     fn user_messages_are_korean() {
         for s in [SourceKind::Mic, SourceKind::System] {
-            for text in [
-                stop_message(s),
-                recovered_message(s),
-                silent_message(s, false),
-            ] {
+            for text in [stop_message(s), silent_message(s, false)] {
                 assert!(text.chars().any(|c| ('가'..='힣').contains(&c)));
             }
         }
