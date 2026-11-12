@@ -210,6 +210,7 @@ pub fn load(path: &Path) -> anyhow::Result<Settings> {
     match serde_json::from_slice(json) {
         Ok(mut settings) => {
             drop_bad_extra_body(&mut settings);
+            replace_retired_asr(&mut settings);
             Ok(settings)
         }
         Err(e) => {
@@ -229,6 +230,17 @@ pub fn load(path: &Path) -> anyhow::Result<Settings> {
             }
             Ok(Settings::default())
         }
+    }
+}
+
+/// A removed local Whisper model (`models::RETIRED_IDS`) becomes the default
+/// ASR, SenseVoice Small (decision 2026-11-12).
+fn replace_retired_asr(settings: &mut Settings) {
+    if let AsrConfig::Local { model_id } = &settings.asr
+        && crate::models::RETIRED_IDS.contains(&model_id.as_str())
+    {
+        log::info!("ASR model {model_id} was removed; using the default");
+        settings.asr = Settings::default().asr;
     }
 }
 
@@ -480,40 +492,40 @@ mod tests {
         assert!(!text.contains("LEAK1234"), "{text}");
     }
 
-    /// The ids of the sherpa-onnx Whisper and Fun-ASR models (before
-    /// 2026-11-09) are now the whisper.cpp and transcribe.cpp models.
+    /// Fun-ASR (its id is that of the sherpa-onnx files of before 2026-11-09)
+    /// stays; a removed Whisper model becomes SenseVoice Small.
     #[test]
-    fn a_file_with_a_whisper_or_fun_asr_model_keeps_it() {
+    fn a_file_with_a_removed_whisper_model_gets_the_default_asr() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
+        let default = Settings::default().asr;
         assert_eq!(
-            Settings::default().asr,
+            default,
             AsrConfig::Local {
                 model_id: crate::models::SENSE_VOICE_ID.into()
             }
         );
-        for id in [
-            "whisper-base",
-            "whisper-small",
-            "whisper-medium",
-            "whisper-turbo",
-            crate::models::FUN_ASR_MLT_ID,
-        ] {
+        let ids = crate::models::RETIRED_IDS
+            .iter()
+            .map(|id| (*id, default.clone()))
+            .chain([(
+                crate::models::FUN_ASR_MLT_ID,
+                AsrConfig::Local {
+                    model_id: crate::models::FUN_ASR_MLT_ID.into(),
+                },
+            )]);
+        for (id, want) in ids {
             std::fs::write(
                 &path,
-                format!(r#"{{"asr":{{"kind":"local","model_id":"{id}"}}}}"#),
+                format!(
+                    r#"{{"asr":{{"kind":"local","model_id":"{id}"}},"meeting_language":"ja"}}"#
+                ),
             )
             .unwrap();
             let s = load(&path).unwrap();
-            assert_eq!(
-                s.asr,
-                AsrConfig::Local {
-                    model_id: id.into()
-                }
-            );
-            // A file from before the meeting language setting: detect.
-            assert_eq!(s.meeting_language, None);
-            assert!(crate::models::catalog().iter().any(|m| m.id == id));
+            assert_eq!(s.asr, want, "{id}");
+            // The other settings stay.
+            assert_eq!(s.meeting_language.as_deref(), Some("ja"));
         }
     }
 

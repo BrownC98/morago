@@ -7,7 +7,6 @@ mod funasr;
 mod local;
 mod vad;
 mod wav;
-mod whisper;
 
 use crate::gpu::Placement;
 use crate::models;
@@ -36,7 +35,7 @@ pub trait Asr: Send {
 /// `language` (ISO 639-1, `Settings::meeting_language`): `None` = detect per
 /// segment; else the ASR uses it and returns it as `Transcript::language`.
 /// A custom endpoint reads its key with `secrets::get_key(Role::Asr, base_url)`.
-/// `placement`: the device of a Whisper or Fun-ASR model; the sherpa-onnx
+/// `placement`: the device of a Fun-ASR model; the sherpa-onnx
 /// models use the CPU. Two Fun-ASR on one device share one loaded model.
 pub fn build_asr(
     config: &AsrConfig,
@@ -45,11 +44,6 @@ pub fn build_asr(
     placement: &Placement,
 ) -> anyhow::Result<Box<dyn Asr>> {
     match config {
-        AsrConfig::Local { model_id } if model_id.starts_with(models::WHISPER_ID_PREFIX) => {
-            Ok(Box::new(whisper::WhisperAsr::new(
-                models_dir, model_id, language, placement,
-            )?))
-        }
         AsrConfig::Local { model_id } if model_id == models::FUN_ASR_MLT_ID => Ok(Box::new(
             funasr::FunAsr::new(models_dir, model_id, language, placement)?,
         )),

@@ -126,9 +126,8 @@ jobs:
 
   # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
   # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*;
-  # Whisper small (whisper.cpp): speech::whisper; Fun-ASR-MLT-Nano Q8_0
-  # (transcribe.cpp): speech::funasr; Parakeet 일본어 (sherpa-onnx):
-  # speech::local. Manual runs only (about 5.8 GB of models,
+  # Fun-ASR-MLT-Nano Q8_0 (transcribe.cpp): speech::funasr; Parakeet 일본어
+  # (sherpa-onnx): speech::local. Manual runs only (about 5.5 GB of models,
   # cached; only master saves).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'e2e' }}
@@ -177,9 +176,6 @@ jobs:
       - name: End-to-end pipeline test
         working-directory: src-tauri
         run: cargo test --lib engine::tests::pipeline_end_to_end -- --ignored --nocapture
-      - name: Whisper (whisper.cpp) on real clips
-        working-directory: src-tauri
-        run: cargo test --lib speech::whisper::tests::whisper_on_real_clips -- --ignored --nocapture
       - name: Fun-ASR (transcribe.cpp) on real clips
         working-directory: src-tauri
         run: cargo test --lib speech::funasr::tests::funasr_on_real_clips -- --ignored --nocapture

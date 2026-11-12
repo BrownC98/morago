@@ -2768,7 +2768,6 @@ dependencies = [
  "thiserror 2.0.21",
  "transcribe-cpp",
  "uuid",
- "whisper-rs",
  "windows-native-keyring-store",
  "zeroize",
  "zip",
@@ -5766,25 +5765,6 @@ dependencies = [
  "thiserror 2.0.21",
  "windows",
  "windows-core",
-]
-
-[[package]]
-name = "whisper-rs"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
-dependencies = [
- "whisper-rs-sys",
-]
-
-[[package]]
-name = "whisper-rs-sys"
-version = "0.15.0"
-dependencies = [
- "bindgen",
- "cmake",
- "fs_extra",
- "llama-cpp-sys-2",
 ]
 
 [[package]]

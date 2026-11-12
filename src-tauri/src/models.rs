@@ -22,10 +22,10 @@ pub enum ModelKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelInfo {
-    /// Stable id, for example "whisper-small", "gemma-4-e2b-it-q4".
+    /// Stable id, for example "sense-voice-small", "gemma-4-e2b-it-q4".
     pub id: String,
     pub kind: ModelKind,
-    /// Display name, for example "Whisper small".
+    /// Display name, for example "SenseVoice Small".
     pub name: String,
     pub size_bytes: u64,
     /// Short user-facing note (Korean), for example "빠름, 정확도 보통".
@@ -92,15 +92,19 @@ pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
 pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
 /// transcribe.cpp model (GGUF).
 pub const FUN_ASR_FILE: &str = "model.gguf";
-/// whisper.cpp model (ggml).
-pub const WHISPER_FILE: &str = "model.bin";
 /// Model ids by recognizer type; `speech` picks the recognizer by id.
 pub const SENSE_VOICE_ID: &str = "sense-voice-small";
 pub const QWEN3_ASR_ID: &str = "qwen3-asr-0.6b";
 pub const FUN_ASR_MLT_ID: &str = "fun-asr-mlt-nano";
 pub const PARAKEET_JA_ID: &str = "parakeet-tdt-ctc-0.6b-ja";
-/// Prefix of the Whisper ids ("whisper-small").
-pub const WHISPER_ID_PREFIX: &str = "whisper-";
+/// Ids of the removed local Whisper models (whisper.cpp, until 2026-11-12):
+/// settings change them to SenseVoice Small, `remove_retired` deletes their folders.
+pub const RETIRED_IDS: [&str; 4] = [
+    "whisper-base",
+    "whisper-small",
+    "whisper-medium",
+    "whisper-turbo",
+];
 pub const LLM_FILE: &str = "model.gguf";
 
 /// One file of a model: where it comes from and its name in the folder.
@@ -128,17 +132,6 @@ macro_rules! hf {
             concat!("https://huggingface.co/", $path),
             concat!("https://hf-mirror.com/", $path),
         ]
-    };
-}
-
-macro_rules! whisper_file {
-    ($file:literal, $size:expr, $sha:literal) => {
-        &[FileSpec {
-            urls: hf!(concat!("ggerganov/whisper.cpp/resolve/main/", $file)),
-            name: WHISPER_FILE,
-            size: $size,
-            sha256: $sha,
-        }]
     };
 }
 
@@ -276,53 +269,6 @@ const SPECS: &[Spec] = &[
             },
         ],
     },
-    // Whisper (OpenAI, MIT) in the whisper.cpp ggml format (ggerganov/whisper.cpp,
-    // MIT). The ids are those of the earlier sherpa-onnx files: settings keep
-    // the model, and a new download replaces the old folder.
-    Spec {
-        id: "whisper-base",
-        kind: ModelKind::Asr,
-        name: "Whisper base",
-        note: "빠름, 정확도 낮음",
-        files: whisper_file!(
-            "ggml-base-q8_0.bin",
-            81_768_585,
-            "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9"
-        ),
-    },
-    Spec {
-        id: "whisper-small",
-        kind: ModelKind::Asr,
-        name: "Whisper small",
-        note: "SenseVoice보다 느림, 메모리 약 0.6GB. 오류율 % 한 7.5 · 일 12.7 · 중 10.6 · 영 11.2",
-        files: whisper_file!(
-            "ggml-small-q8_0.bin",
-            264_464_607,
-            "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"
-        ),
-    },
-    Spec {
-        id: "whisper-medium",
-        kind: ModelKind::Asr,
-        name: "Whisper medium",
-        note: "느림, 정확도 높음",
-        files: whisper_file!(
-            "ggml-medium-q5_0.bin",
-            539_212_467,
-            "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
-        ),
-    },
-    Spec {
-        id: "whisper-turbo",
-        kind: ModelKind::Asr,
-        name: "Whisper turbo",
-        note: "정확도 높음, CPU에서는 실시간보다 느림, 메모리 약 1GB. 오류율 % 한 7.4 · 일 4.8 · 중 5.3 · 영 9.3",
-        files: whisper_file!(
-            "ggml-large-v3-turbo-q5_0.bin",
-            574_041_195,
-            "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
-        ),
-    },
     // Gemma 4, Apache-2.0, official Google GGUF repos (not gated). Facts:
     // research-gemma.md of the coordinator task (2026-11-08).
     Spec {
@@ -400,9 +346,23 @@ fn spec_installed(models_dir: &Path, spec: &Spec) -> bool {
 }
 
 /// The folder of the model exists: installed, incomplete, or the files of an
-/// older format (sherpa-onnx Whisper and Fun-ASR before 2026-11-09).
+/// older format (sherpa-onnx Fun-ASR before 2026-11-09).
 pub fn on_disk(models_dir: &Path, id: &str) -> bool {
     path(models_dir, id).exists()
+}
+
+/// Deletes the folders of the retired models (`RETIRED_IDS`), also of an
+/// unfinished download. At app start; an error goes to the log only.
+pub fn remove_retired(models_dir: &Path) {
+    for id in RETIRED_IDS {
+        for dir in [path(models_dir, id), models_dir.join(format!("{id}.part"))] {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => log::info!("removed retired model folder {}", dir.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("cannot remove retired model folder {}: {e}", dir.display()),
+            }
+        }
+    }
 }
 
 /// Deletes the folder of a catalog model.
@@ -628,10 +588,6 @@ mod tests {
             QWEN3_ASR_ID,
             FUN_ASR_MLT_ID,
             PARAKEET_JA_ID,
-            "whisper-base",
-            "whisper-small",
-            "whisper-medium",
-            "whisper-turbo",
             "gemma-4-e2b-it-q4",
             "gemma-4-12b-it-q4",
         ] {
@@ -642,15 +598,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), cat.len(), "ids must be unique");
         assert!(cat.iter().all(|m| m.size_bytes > 0));
-        // Whisper: one whisper.cpp file, the ids of the earlier sherpa-onnx models.
-        for spec in SPECS.iter().filter(|s| s.id.starts_with(WHISPER_ID_PREFIX)) {
-            assert_eq!(spec.kind, ModelKind::Asr);
-            assert_eq!(spec.files.len(), 1, "{}", spec.id);
-            assert_eq!(spec.files[0].name, WHISPER_FILE);
-            assert!(spec.files[0].urls[0].contains("/ggerganov/whisper.cpp/"));
-        }
-        let small = cat.iter().find(|m| m.id == "whisper-small").unwrap();
-        assert_eq!(small.size_bytes, 264_464_607);
+        assert!(!cat.iter().any(|m| RETIRED_IDS.contains(&m.id.as_str())));
         let sv = cat.iter().find(|m| m.id == SENSE_VOICE_ID).unwrap();
         assert_eq!(sv.size_bytes, 239_233_841 + 315_894);
         // The 2024-07-17 int8 file: the 2025-09-09 one breaks ko, ja and en.
@@ -799,31 +747,9 @@ mod tests {
         dir
     }
 
-    /// A Whisper folder with the sherpa-onnx files of before 2026-11-09.
-    fn old_whisper_folder(dir: &Path) -> PathBuf {
-        let old = path(dir, "whisper-small");
-        std::fs::create_dir_all(&old).unwrap();
-        for f in [ENCODER_FILE, DECODER_FILE, TOKENS_FILE] {
-            std::fs::write(old.join(f), b"old").unwrap();
-        }
-        old
-    }
-
-    #[test]
-    fn an_old_format_whisper_folder_is_on_disk_but_not_installed() {
-        let dir = temp_dir("old");
-        old_whisper_folder(&dir);
-        assert!(on_disk(&dir, "whisper-small"));
-        assert!(!is_installed(&dir, "whisper-small"));
-        assert!(!on_disk(&dir, "whisper-base"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_old_format_fun_asr_folder_is_on_disk_but_not_installed() {
-        let dir = temp_dir("old-fun");
-        // The sherpa-onnx files of before 2026-11-09.
-        let old = path(&dir, FUN_ASR_MLT_ID);
+    /// A Fun-ASR folder with the sherpa-onnx files of before 2026-11-09.
+    fn old_fun_asr_folder(dir: &Path) -> PathBuf {
+        let old = path(dir, FUN_ASR_MLT_ID);
         std::fs::create_dir_all(&old).unwrap();
         for f in [
             "encoder_adaptor.int8.onnx",
@@ -835,10 +761,38 @@ mod tests {
         ] {
             std::fs::write(old.join(f), b"old").unwrap();
         }
+        old
+    }
+
+    #[test]
+    fn an_old_format_fun_asr_folder_is_on_disk_but_not_installed() {
+        let dir = temp_dir("old-fun");
+        let old = old_fun_asr_folder(&dir);
         assert!(on_disk(&dir, FUN_ASR_MLT_ID));
         assert!(!is_installed(&dir, FUN_ASR_MLT_ID));
+        assert!(!on_disk(&dir, SENSE_VOICE_ID));
         std::fs::write(old.join(FUN_ASR_FILE), b"new").unwrap();
         assert!(is_installed(&dir, FUN_ASR_MLT_ID));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retired_model_folders_are_removed_and_others_kept() {
+        let dir = temp_dir("retired");
+        for id in RETIRED_IDS {
+            std::fs::create_dir_all(path(&dir, id)).unwrap();
+            std::fs::write(path(&dir, id).join("model.bin"), b"old").unwrap();
+        }
+        std::fs::create_dir_all(dir.join("whisper-turbo.part")).unwrap();
+        old_fun_asr_folder(&dir);
+        remove_retired(&dir);
+        for id in RETIRED_IDS {
+            assert!(!on_disk(&dir, id), "{id}");
+        }
+        assert!(!dir.join("whisper-turbo.part").exists());
+        assert!(on_disk(&dir, FUN_ASR_MLT_ID));
+        // Nothing left to remove: no error.
+        remove_retired(&dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -850,37 +804,37 @@ mod tests {
         let hash = sha(&body);
         let files = [FileSpec {
             urls: &[&url],
-            name: WHISPER_FILE,
+            name: FUN_ASR_FILE,
             size: 1000,
             sha256: &hash,
         }];
         let spec = Spec {
-            id: "whisper-small",
+            id: FUN_ASR_MLT_ID,
             kind: ModelKind::Asr,
             name: "t",
             note: "t",
             files: &files,
         };
         let dir = temp_dir("replace");
-        let old = old_whisper_folder(&dir);
+        let old = old_fun_asr_folder(&dir);
         download_spec(&dir, &spec, &|_| {}, &AtomicBool::new(false)).unwrap();
         let mut names: Vec<_> = std::fs::read_dir(&old)
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         names.sort();
-        assert_eq!(names, [WHISPER_FILE]);
+        assert_eq!(names, [FUN_ASR_FILE]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn delete_removes_the_folder_of_a_catalog_model_only() {
         let dir = temp_dir("delete");
-        old_whisper_folder(&dir);
-        delete(&dir, "whisper-small").unwrap();
-        assert!(!on_disk(&dir, "whisper-small"));
+        old_fun_asr_folder(&dir);
+        delete(&dir, FUN_ASR_MLT_ID).unwrap();
+        assert!(!on_disk(&dir, FUN_ASR_MLT_ID));
         // Nothing on disk: no error.
-        delete(&dir, "whisper-small").unwrap();
+        delete(&dir, FUN_ASR_MLT_ID).unwrap();
         std::fs::create_dir_all(dir.join("other")).unwrap();
         for id in ["other", "..", "", "../x"] {
             assert!(delete(&dir, id).is_err(), "{id}");

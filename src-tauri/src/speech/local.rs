@@ -1,8 +1,8 @@
 //! Local ASR: sherpa-onnx offline recognizers (int8): SenseVoice Small,
 //! Qwen3-ASR and Parakeet 일본어. SenseVoice and Qwen3-ASR detect the language
 //! per segment, or use the meeting language of the settings; Parakeet knows
-//! only Japanese and runs only with the meeting language ja. Whisper runs on whisper.cpp (`whisper.rs`),
-//! Fun-ASR-MLT-Nano on transcribe.cpp (`funasr.rs`).
+//! only Japanese and runs only with the meeting language ja.
+//! Fun-ASR-MLT-Nano runs on transcribe.cpp (`funasr.rs`).
 //!
 //! The safe `sherpa-onnx` crate drops the detected language from the result,
 //! so this file calls the C API through `sherpa-onnx-sys` and reads `lang`
@@ -224,7 +224,7 @@ pub(super) fn transcript(text: &str, lang: &str) -> Transcript {
     let text = text.trim().to_string();
     let language = match lang.trim().trim_start_matches("<|").trim_end_matches("|>") {
         "" => language_from_script(&text),
-        // Cantonese (SenseVoice, Whisper large-v3) has no ISO 639-1 code of its own.
+        // Cantonese (SenseVoice) has no ISO 639-1 code of its own.
         "yue" => Some("zh".to_string()),
         lang => language_code(lang),
     };
