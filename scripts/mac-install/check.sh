@@ -39,10 +39,17 @@ ax trusted
 # Lines of the window that match a pattern.
 has() { ax dump "$(pid)" 2>/dev/null | grep -E -- "$1"; }
 # Waits until the window has (or, with `gone`, no longer has) a matching line.
+# `gone` needs the web page in the dump: an empty dump (no app, a time limit)
+# is not "gone".
 wait_for() { # <pattern> <seconds> [gone]
-  local i
+  local i d
   for ((i = 0; i < $2; i += 2)); do
-    if has "$1" >/dev/null; then [ "${3:-}" = gone ] || return 0; else [ "${3:-}" != gone ] || return 0; fi
+    d=$(ax dump "$(pid)" 2>/dev/null)
+    if grep -qE -- "$1" <<<"$d"; then
+      [ "${3:-}" = gone ] || return 0
+    elif [ "${3:-}" = gone ] && grep -q AXWebArea <<<"$d"; then
+      return 0
+    fi
     sleep 2
   done
   return 1
@@ -154,9 +161,9 @@ sleep 5; shot 3-downloading
 t0=$(date +%s)
 step model-download 1800 '(SenseVoice Small|Gemma 4 E2B) 내려받기' gone
 res model-download-time info "SenseVoice Small and Gemma 4 E2B in $(( $(date +%s) - t0 )) s"
-# The updater asks the real release manifest.
+# The updater asks the real release manifest. An older tag has an update.
 press AXButton "업데이트 확인"
-step update-check 60 '최신 버전입니다'
+step update-check 60 '최신 버전입니다|새 버전 [0-9.]+이 있습니다'
 models=~/Library/Application\ Support/com.morago.app/models
 find "$models" -type f -exec shasum -a 256 {} + 2>&1 | tee "$out/models.txt"
 bad=0; n=0
