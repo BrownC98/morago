@@ -59,7 +59,33 @@ function UpdateCard() {
   );
 }
 
-function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boolean; onUse?: () => void }) {
+const MEETING_LANGUAGES = [
+  { value: "", label: "자동 감지" },
+  { value: "ko", label: "한국어" },
+  { value: "ja", label: "日本語" },
+  { value: "zh", label: "中文" },
+  { value: "en", label: "English" },
+];
+
+/** Why a single-language model cannot run with the meeting language, or null. */
+function languageBlock(model: ModelInfo, meetingLanguage: string | null | undefined): string | null {
+  if (!model.only_language || model.only_language === meetingLanguage) return null;
+  const name = MEETING_LANGUAGES.find((l) => l.value === model.only_language)?.label ?? model.only_language;
+  return `회의 언어를 ${name}로 고르면 쓸 수 있습니다.`;
+}
+
+function ModelRow({
+  model,
+  selected,
+  onUse,
+  blocked,
+}: {
+  model: ModelInfo;
+  selected?: boolean;
+  onUse?: () => void;
+  /** Reason why the model cannot run now (meeting language). */
+  blocked?: string | null;
+}) {
   const { downloads, downloadErrors, startDownload, cancelDownload, deleteModel } = useApp();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const dl = downloads[model.id];
@@ -103,6 +129,7 @@ function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boo
           <span className="fhint">
             {model.note}
             {model.on_disk && !model.installed && <> · 이전 형식의 파일이 있습니다. 이 파일은 쓰지 않습니다.</>}
+            {blocked && <span className={selected ? "errtext" : undefined}> · {blocked}</span>}
             {err && <span className="errtext"> · {err}</span>}
           </span>
           {model.installed ? (
@@ -110,7 +137,13 @@ function ModelRow({ model, selected, onUse }: { model: ModelInfo; selected?: boo
               {selected ? (
                 <span className="ok">사용 중</span>
               ) : onUse ? (
-                <button type="button" className="ab sm" onClick={onUse} aria-label={`${model.name} 사용하기`}>
+                <button
+                  type="button"
+                  className="ab sm"
+                  onClick={onUse}
+                  disabled={!!blocked}
+                  aria-label={`${model.name} 사용하기`}
+                >
                   사용하기
                 </button>
               ) : (
@@ -627,6 +660,7 @@ function ProviderCard({ role }: { role: KeyRole }) {
               model={m}
               selected={cfg.model_id === m.id}
               onUse={() => set({ kind: "local", model_id: m.id })}
+              blocked={languageBlock(m, settings?.meeting_language)}
             />
           ))}
           {list.length === 0 && <p className="fhint">내려받을 수 있는 모델 목록을 불러오지 못했습니다.</p>}
@@ -919,13 +953,7 @@ export function SettingsTab({ active }: { active: boolean }) {
                   width={340}
                   value={settings.meeting_language ?? ""}
                   onChange={(v) => app.updateSettings({ meeting_language: v || null })}
-                  options={[
-                    { value: "", label: "자동 감지" },
-                    { value: "ko", label: "한국어" },
-                    { value: "ja", label: "日本語" },
-                    { value: "zh", label: "中文" },
-                    { value: "en", label: "English" },
-                  ]}
+                  options={MEETING_LANGUAGES}
                 />
               </div>
               <span className="fhint">
@@ -970,6 +998,10 @@ export function SettingsTab({ active }: { active: boolean }) {
                 <li translate="no">
                   Fun-ASR-MLT-Nano (FunAudioLLM, Alibaba Group): FunASR Model License 1.1
                   (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). GGUF conversion by handy-computer
+                </li>
+                <li translate="no">
+                  Parakeet 일본어: NVIDIA parakeet-tdt_ctc-0.6b-ja, CC BY 4.0
+                  (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX int8 by k2-fsa (sherpa-onnx)
                 </li>
                 <li translate="no">Whisper (OpenAI): MIT License</li>
                 <li translate="no">whisper.cpp, ggml (The ggml authors): MIT License</li>

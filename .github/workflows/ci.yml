@@ -127,7 +127,8 @@ jobs:
   # End to end with real models (VAD, SenseVoice Small, speaker embedding, Gemma 4
   # E2B): engine::tests::pipeline_end_to_end, translate::local::tests::local_model*;
   # Whisper small (whisper.cpp): speech::whisper; Fun-ASR-MLT-Nano Q8_0
-  # (transcribe.cpp): speech::funasr. Manual runs only (about 5.1 GB of models,
+  # (transcribe.cpp): speech::funasr; Parakeet 일본어 (sherpa-onnx):
+  # speech::local. Manual runs only (about 5.8 GB of models,
   # cached; only master saves).
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'e2e' }}
@@ -158,12 +159,12 @@ jobs:
           # A cache stays in the ref that saved it: branch copies only push
           # the master caches out of the 10 GB repository limit.
           save-if: ${{ github.ref_name == 'master' }}
-      # The model files are the same on both OSes: one 4.4 GB copy, not two.
+      # The model files are the same on both OSes: one 5.1 GB copy, not two.
       - uses: actions/cache/restore@v4
         id: models
         with:
           path: e2e/models
-          key: e2e-models-v4
+          key: e2e-models-v5
           enableCrossOsArchive: true
       - name: Test speech clips (sherpa-onnx model test files)
         shell: bash
@@ -182,6 +183,9 @@ jobs:
       - name: Fun-ASR (transcribe.cpp) on real clips
         working-directory: src-tauri
         run: cargo test --lib speech::funasr::tests::funasr_on_real_clips -- --ignored --nocapture
+      - name: Parakeet Japanese on a real clip
+        working-directory: src-tauri
+        run: cargo test --lib speech::local::tests::parakeet_ja_on_a_real_clip -- --ignored --nocapture
       - name: Local translation with context
         working-directory: src-tauri
         env:
@@ -191,7 +195,7 @@ jobs:
         if: github.ref_name == 'master' && steps.models.outputs.cache-hit != 'true'
         with:
           path: e2e/models
-          key: e2e-models-v4
+          key: e2e-models-v5
           enableCrossOsArchive: true
 
   # Installers (NSIS, dmg) only at release: tags v* and manual runs with job=bundle.

@@ -117,6 +117,8 @@ export interface ModelInfo {
   name: string;
   size_bytes: number;
   note: string;
+  /** The one meeting language (ISO 639-1) that the model knows; null = many. */
+  only_language?: string | null;
   installed: boolean;
   /** Files on disk: installed, or files of an older format that the app does not use. */
   on_disk: boolean;
