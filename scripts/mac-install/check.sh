@@ -57,7 +57,8 @@ system_profiler SPAudioDataType 2>&1 | tee "$out/audio-devices.txt"
 
 echo "== 1. install"
 dmg="$out/morago.dmg"
-url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$tag" | jq -r '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url')
+# The link of the release page, as a browser gets it (the API without a token gave 403 in run 43179138069).
+url="https://github.com/$repo/releases/download/$tag/morago_${tag#v}_aarch64.dmg"
 curl -fsSL --retry 5 -o "$dmg" "$url" && res download pass "$url ($(stat -f %z "$dmg") bytes, sha256 $(shasum -a 256 "$dmg" | cut -c1-16)…)" || res download fail "$url"
 # A browser marks its downloads; the mark goes to the files of the mounted image.
 xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$dmg"
@@ -67,6 +68,7 @@ ls -la "$mnt" | tee -a "$out/hdiutil.txt"
 rm -rf "$app"
 cp -R "$mnt/morago.app" /Applications/ && res copy pass "morago.app → /Applications" || res copy fail "cp failed"
 hdiutil detach "$mnt" >/dev/null
+[ -d "$app" ] || { echo "::error::no app to check"; exit 1; }
 rm "$dmg"
 {
   echo "-- xattr"; xattr -l "$app"
