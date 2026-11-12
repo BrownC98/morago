@@ -107,7 +107,7 @@ fi
 xattr -dr com.apple.quarantine "$app"
 
 echo "== 2. start"
-launch() { tmo 60 open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"; }
+launch() { tmo 60 open --env RUST_LOG=debug --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"; }
 launch
 sleep 10
 ax fit "$(pid)" 1024 700
@@ -176,7 +176,8 @@ mkdir -p "$out/wavs"
 hf=https://huggingface.co/csukuangfj
 curl -fsSL --retry 5 -o "$out/wavs/en.wav" $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
 curl -fsSL --retry 5 -o "$out/wavs/ja.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
-for w in en ja; do afplay "$out/wavs/$w.wav" 2>&1; sleep 4; done
+curl -fsSL --retry 5 -o "$out/wavs/ko.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ko.wav
+for w in en ja ko; do afinfo "$out/wavs/$w.wav" | grep -E 'File:|duration'; date -u +%T; afplay "$out/wavs/$w.wav" 2>&1; sleep 6; done
 rm -rf "$out/wavs"
 shot 3-meeting-after-speech
 # Until a translation is in the session file (the model loads at the first one).
@@ -193,7 +194,7 @@ step meeting-stop 180 '회의 시작'
 sessions=~/Documents/morago/sessions
 find "$sessions" -type f -exec ls -l {} + 2>&1 | tee "$out/session-files.txt"
 dir=$(ls -d "$sessions"/*/ 2>/dev/null | head -1)
-cp "$dir"/meta.json "$dir"/utterances.jsonl "$out/" 2>/dev/null
+cp "$dir"/meta.json "$dir"/utterances.jsonl "$dir"/audio.wav "$out/" 2>/dev/null
 u=$(wc -l <"$dir/utterances.jsonl" 2>/dev/null | tr -d ' ')
 [ "${u:-0}" -ge 1 ] && res session-save pass "meta.json and utterances.jsonl with $u lines" || res session-save fail "no utterance in $dir"
 jq -r 'select(.translation.state == "done") | .translation.text' "$dir/utterances.jsonl" 2>/dev/null | grep -q '[가-힣]' && res translation pass "utterances have a Korean translation" || res translation fail "no Korean translation in utterances.jsonl"
@@ -205,7 +206,6 @@ press AXRadioButton "=기록" || press '*' "=기록"
 step records-tab 20 '폴더 열기'
 grep -q '회의 녹음' "$out/ax-records-tab.txt" && res records-player pass "the records tab shows the recording player" || res records-player fail "no player (회의 녹음) on the records tab"
 # Export: the save dialog of macOS, with its default folder and name.
-touch "$out/.before-export"
 for b in "=Markdown" "녹음(WAV)"; do
   press AXButton "$b"
   wait_for 'AXButton.*\|Save$' 20 || res export fail "no save dialog for $b"
@@ -214,7 +214,7 @@ for b in "=Markdown" "녹음(WAV)"; do
   wait_for '내보냈습니다' 30 || res export fail "no '내보냈습니다' after Save for $b"
   press AXButton "알림 닫기"; sleep 1
 done
-find ~/Documents ~/Desktop ~/Downloads -maxdepth 2 -newer "$out/.before-export" -type f \( -name '*.md' -o -name '*.wav' \) -not -path '*/sessions/*' -exec ls -l {} + 2>/dev/null | tee "$out/export-files.txt"
+find ~/Documents ~/Desktop ~/Downloads -maxdepth 2 -type f \( -name '*.md' -o -name '*.wav' \) -not -path '*/sessions/*' -exec ls -l {} + 2>/dev/null | tee "$out/export-files.txt"
 md=$(grep -o '/.*\.md$' "$out/export-files.txt" | head -1); wav=$(grep -o '/.*\.wav$' "$out/export-files.txt" | head -1)
 [ -n "$md" ] && cp "$md" "$out/export.md"
 [ -s "$md" ] && grep -q '[가-힣]' "$md" && res export-markdown pass "$md" || res export-markdown fail "no Markdown file"
