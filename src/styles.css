@@ -64,10 +64,12 @@ main > [role="tabpanel"] { height: 100%; }
 .timer::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--a-rec); }
 
 .bar { display: flex; align-items: center; gap: 18px; padding: 0 16px; background: var(--a-side); border-top: 1px solid var(--a-line); font-size: 12px; color: var(--a-ink-2); min-width: 0; overflow: hidden; white-space: nowrap; }
-.bar .bi { display: inline-flex; align-items: center; min-width: 0; }
-.bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok); display: inline-block; margin-right: 6px; flex: none; }
+/* Labels keep their width (up to a third of the bar); an error line takes the rest and clips first. */
+.bar .bi { flex: none; max-width: 33%; overflow: hidden; text-overflow: ellipsis; }
+.bar .bi.err { flex: 0 1 auto; min-width: 0; max-width: none; }
+.bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok); display: inline-block; vertical-align: middle; margin-right: 6px; }
 .bar .dot.bad { background: var(--a-err); }
-.berr { color: var(--a-err); overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.berr { color: var(--a-err); white-space: pre; }
 
 /* live */
 .live { display: flex; flex-direction: column; min-height: 0; }

@@ -63,6 +63,18 @@ const STAGE_NAME: Record<EngineStage, string> = {
   session: "회의",
 };
 
+/** One status-bar item: one line that ends with "…" when the bar is narrow; the tooltip has all of it. */
+function StatusItem({ text, error }: { text?: string; error?: string }) {
+  const sep = text && error ? " · " : "";
+  return (
+    <span className={error ? "bi err" : "bi"} title={`${text ?? ""}${sep}${error ?? ""}`}>
+      <span className={error ? "dot bad" : "dot"} aria-hidden="true" />
+      {text}
+      {error && <span className="berr">{sep}{error}</span>}
+    </span>
+  );
+}
+
 export function LiveTab({ active }: { active: boolean }) {
   const app = useApp();
   const levels = useLevels();
@@ -260,25 +272,10 @@ export function LiveTab({ active }: { active: boolean }) {
         </div>
       </div>
       <div className="bar">
-        <span className="bi">
-          <span className={engineErrors.asr ? "dot bad" : "dot"} aria-hidden="true" />
-          음성 인식: {asrLabel}
-          {asrDevice}
-          {engineErrors.asr && <span className="berr" title={engineErrors.asr}> · {engineErrors.asr}</span>}
-        </span>
-        <span className="bi">
-          <span className={engineErrors.translate ? "dot bad" : "dot"} aria-hidden="true" />
-          번역: {trLabel}
-          {trDevice}
-          {engineErrors.translate && <span className="berr" title={engineErrors.translate}> · {engineErrors.translate}</span>}
-        </span>
+        <StatusItem text={`음성 인식: ${asrLabel}${asrDevice}`} error={engineErrors.asr} />
+        <StatusItem text={`번역: ${trLabel}${trDevice}`} error={engineErrors.translate} />
         {otherErrors.map((s) => (
-          <span className="bi" key={s}>
-            <span className="dot bad" aria-hidden="true" />
-            <span className="berr" title={engineErrors[s]}>
-              {STAGE_NAME[s]} 오류: {engineErrors[s]}
-            </span>
-          </span>
+          <StatusItem key={s} error={`${STAGE_NAME[s]} 오류: ${engineErrors[s]}`} />
         ))}
         <span className="sp" />
         {running && settings.record_audio && !engineErrors.store?.startsWith("녹음을") && <RecordingBadge />}

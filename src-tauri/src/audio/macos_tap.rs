@@ -329,7 +329,7 @@ fn check(status: OSStatus, what: &str) -> anyhow::Result<()> {
     }
     log::error!("audio System: {what} failed, OSStatus {status}");
     anyhow::bail!(
-        "시스템 소리를 시작하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 Morago를 켜고 앱을 다시 시작하세요."
+        "시스템 소리를 시작하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 morago를 켜고 앱을 다시 시작하세요."
     )
 }
 

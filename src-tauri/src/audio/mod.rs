@@ -31,7 +31,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use worker::Feeder;
 
-/// Tells the engine about a stop or a recovery of one capture (Korean user message).
+/// Tells the engine about a stop or a recovery of one capture (Korean user message). An empty
+/// message clears the error of that capture.
 pub type ErrorSink = Arc<dyn Fn(String) + Send + Sync>;
 
 /// macOS: first version where system audio can be recorded (Core Audio process tap).
@@ -486,8 +487,8 @@ fn failure_message(source: SourceKind, failure: &Failure, macos: bool) -> String
     };
     match failure {
         Failure::Permission => match (source, macos) {
-            (SourceKind::Mic, true) => "마이크 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 Morago를 켜고 앱을 다시 시작하세요.".into(),
-            (SourceKind::System, true) => "시스템 소리 녹음 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 Morago를 켜고 앱을 다시 시작하세요.".into(),
+            (SourceKind::Mic, true) => "마이크 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 morago를 켜고 앱을 다시 시작하세요.".into(),
+            (SourceKind::System, true) => "시스템 소리 녹음 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 morago를 켜고 앱을 다시 시작하세요.".into(),
             (SourceKind::Mic, false) => "마이크 권한이 없습니다. 설정 > 개인 정보 및 보안 > 마이크에서 '마이크 액세스'와 '데스크톱 앱이 마이크에 액세스하도록 허용'을 켜세요.".into(),
             (SourceKind::System, false) => "시스템 소리를 받을 권한이 없습니다. 장치 설정을 확인하세요.".into(),
         },
@@ -521,9 +522,9 @@ fn recovered_message(source: SourceKind) -> String {
 /// Exact zeros for the first seconds: a denied permission (macOS) or a muted device.
 fn silent_message(source: SourceKind, macos: bool) -> String {
     match (source, macos) {
-        (SourceKind::Mic, true) => "마이크에서 3초 동안 소리가 전혀 들어오지 않습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 Morago가 켜져 있는지 확인하세요.".into(),
+        (SourceKind::Mic, true) => "마이크에서 3초 동안 소리가 전혀 들어오지 않습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 morago가 켜져 있는지 확인하세요.".into(),
         (SourceKind::Mic, false) => "마이크에서 3초 동안 소리가 전혀 들어오지 않습니다. 마이크가 꺼져 있거나 설정 > 개인 정보 및 보안 > 마이크의 접근 권한이 꺼져 있는지 확인하세요.".into(),
-        (SourceKind::System, true) => "시스템 소리에서 3초 동안 소리가 전혀 들어오지 않습니다. 재생 중인 소리가 없거나 권한이 꺼져 있을 수 있습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 Morago를 확인하세요.".into(),
+        (SourceKind::System, true) => "시스템 소리에서 3초 동안 소리가 전혀 들어오지 않습니다. 재생 중인 소리가 없거나 권한이 꺼져 있을 수 있습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 morago를 확인하세요.".into(),
         (SourceKind::System, false) => "시스템 소리에서 3초 동안 소리가 전혀 들어오지 않습니다. 재생 중인 소리가 없거나 출력 장치 설정에 문제가 있을 수 있습니다.".into(),
     }
 }
