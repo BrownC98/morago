@@ -3,13 +3,18 @@
 # (ci.yml, manual job `mac-install`). It does what a user does: download the
 # dmg from the GitHub release, copy the app to /Applications, open it, and
 # press the controls of the window through the accessibility API (ax.swift).
-# Usage: scripts/mac-install/check.sh <tag> <out-dir>
+# The signature checks of a dmg before its release are in mac-launch-check.sh.
+# Usage: scripts/mac-install/check.sh <out-dir> [<tag>]
 #   <out-dir> gets results.tsv (check, pass|fail|info, note), screenshots, logs.
+#   <tag>: default, the latest release (needs GH_TOKEN).
+# The runner (3 CPUs, a virtual GPU) plays sound late while the translation
+# model works: the meeting checks need one utterance with a translation, not
+# every clip (runs 43184650099, 43187081403).
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-tag=$1
-out=$(mkdir -p "$2" && cd "$2" && pwd)
+out=$(mkdir -p "$1" && cd "$1" && pwd)
 repo=${GITHUB_REPOSITORY:-BrownC98/morago}
+tag=${2:-$(gh release view -R "$repo" --json tagName --jq .tagName)}
 app=/Applications/morago.app
 fail=0
 res() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$out/results.tsv"; [ "$2" != fail ] || fail=1; }
@@ -50,14 +55,14 @@ echo "== sound device"
 brew install --cask blackhole-2ch >"$out/blackhole.txt" 2>&1 || tail -20 "$out/blackhole.txt"
 sudo killall coreaudiod 2>/dev/null || sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 sleep 5
-brew install switchaudio-osx sox >>"$out/blackhole.txt" 2>&1
+brew install switchaudio-osx >>"$out/blackhole.txt" 2>&1
 SwitchAudioSource -t input -s "BlackHole 2ch"; SwitchAudioSource -t output -s "BlackHole 2ch"
 system_profiler SPAudioDataType 2>&1 | tee "$out/audio-devices.txt"
 [ "$(SwitchAudioSource -c -t input)$(SwitchAudioSource -c -t output)" = "BlackHole 2chBlackHole 2ch" ] && res sound-device info "BlackHole 2ch is the default input and output device" || res sound-device info "no loopback device: a meeting gets no sound"
 
 echo "== 1. install"
 dmg="$out/morago.dmg"
-# The link of the release page, as a browser gets it (the API without a token gave 403 in run 43179138069).
+# The link of the release page, as a browser gets it.
 url="https://github.com/$repo/releases/download/$tag/morago_${tag#v}_aarch64.dmg"
 curl -fsSL --retry 5 -o "$dmg" "$url" && res download pass "$url ($(stat -f %z "$dmg") bytes, sha256 $(shasum -a 256 "$dmg" | cut -c1-16)…)" || res download fail "$url"
 # A browser marks its downloads; the mark goes to the files of the mounted image.
@@ -107,7 +112,7 @@ fi
 xattr -dr com.apple.quarantine "$app"
 
 echo "== 2. start"
-launch() { tmo 60 open --env RUST_LOG=debug --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"; }
+launch() { tmo 60 open --env RUST_LOG=info --stdout "$out/app.log" --stderr "$out/app.log" "$app" || res open fail "open failed or did not return in 60 s"; }
 launch
 sleep 10
 ax fit "$(pid)" 1024 700
@@ -139,7 +144,6 @@ step() { # <check> <seconds> <pattern that must show> [gone]: result line + tree
   ax dump "$(pid)" >"$out/ax-$1.txt" 2>&1; shot "3-$1"
 }
 step ui-tree 60 'AXWebArea'
-cat "$out/ax-ui-tree.txt"
 
 # Models: the two notices on the meeting tab lead to the settings tab.
 press AXButton "설정에서 내려받기"
@@ -164,7 +168,6 @@ done <"$out/models.txt"
 # Meeting with the recording on.
 press AXRadioButton "=회의" || press '*' "=회의"
 step meeting-tab 20 '회의 시작'
-grep -E 'AXCheckBox|회의 시작' "$out/ax-meeting-tab.txt"
 press AXCheckBox "WAV 파일로 저장"
 sleep 2
 settings=~/Library/Application\ Support/com.morago.app/settings.json
@@ -177,13 +180,7 @@ hf=https://huggingface.co/csukuangfj
 curl -fsSL --retry 5 -o "$out/wavs/en.wav" $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
 curl -fsSL --retry 5 -o "$out/wavs/ja.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
 curl -fsSL --retry 5 -o "$out/wavs/ko.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ko.wav
-# A second recorder on the same input: it tells a clip that did not play
-# (a slow runner) from a clip that the app did not capture.
-rec -q -c 1 -r 16000 -b 16 "$out/witness.wav" 2>"$out/witness.log" &
-witness=$!
-date -u +"witness start %T"
-for w in en ja ko; do afinfo "$out/wavs/$w.wav" | grep -E 'File:|duration'; date -u +%T; afplay "$out/wavs/$w.wav" 2>&1; sleep ${CLIP_GAP:-6}; done
-kill -INT $witness; wait $witness 2>/dev/null
+for w in en ja ko; do afplay "$out/wavs/$w.wav" 2>&1; sleep 8; done
 rm -rf "$out/wavs"
 shot 3-meeting-after-speech
 # Until a translation is in the session file (the model loads at the first one).
@@ -236,7 +233,6 @@ sleep 8
 [ -z "$(pid)" ] && res quit pass "the app ends on Quit" || { res quit fail "the app still runs 8 s after Quit"; pkill -x morago; sleep 3; }
 launch
 step restart 60 '회의 시작'
-grep -E 'AXCheckBox' "$out/ax-restart.txt"
 grep -qE 'AXCheckBox.*WAV 파일로 저장.* 1$' "$out/ax-restart.txt" && res settings-kept pass "the 녹음 switch is still on after a restart" || res settings-kept fail "the 녹음 switch is off after a restart"
 kill $prompts 2>/dev/null
 [ -f "$out/prompts.txt" ] && res prompts info "$(grep -c '^-- prompt' "$out/prompts.txt") macOS permission dialogs; see prompts.txt" || res prompts info "macOS showed no permission dialog"
@@ -244,7 +240,6 @@ kill $prompts 2>/dev/null
 echo "== end"
 {
   echo "-- TCC user db"; sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "select service, client, auth_value from access where client like '%morago%'" 2>&1
-  echo "-- app files"; ls -la ~/Library/Application\ Support/com.morago.app ~/Documents/morago 2>&1
 } | tee "$out/probes.txt"
 pkill -x morago; sleep 2
 [ -z "$(crashes)" ] && res crash-reports pass "no crash report of morago" || { res crash-reports fail "$(crashes)"; cp ~/Library/Logs/DiagnosticReports/*orago* "$out/" 2>/dev/null; }

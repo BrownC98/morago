@@ -12,8 +12,7 @@ on:
         required: true
         options: [e2e, bundle, mac-install]
       tag:
-        description: "mac-install: the release tag"
-        default: v0.7.0
+        description: "mac-install: the release tag (empty: the latest release)"
 
 # A new push to a work branch cancels its older run. Runs on master, the
 # integration branch 회의번역앱 and gate/* always finish: the merge gate waits
@@ -286,14 +285,17 @@ jobs:
           if-no-files-found: error
 
   # A user's path on a Mac with the dmg of a GitHub release: install, open,
-  # download models, run a meeting. Manual runs only.
+  # download models, run a meeting with a recording, export, start again.
+  # Manual runs only, after a release.
   mac-install:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'mac-install' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: CLIP_GAP=4 scripts/mac-install/check.sh "${{ inputs.tag }}" mac-install-out
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/mac-install/check.sh mac-install-out "${{ inputs.tag }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
