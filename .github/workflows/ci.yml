@@ -293,7 +293,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: scripts/mac-install/check.sh "${{ inputs.tag }}" mac-install-out
+      - run: CLIP_GAP=4 scripts/mac-install/check.sh "${{ inputs.tag }}" mac-install-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:

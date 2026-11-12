@@ -177,7 +177,7 @@ hf=https://huggingface.co/csukuangfj
 curl -fsSL --retry 5 -o "$out/wavs/en.wav" $hf/sherpa-onnx-whisper-base/resolve/main/test_wavs/0.wav
 curl -fsSL --retry 5 -o "$out/wavs/ja.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ja.wav
 curl -fsSL --retry 5 -o "$out/wavs/ko.wav" $hf/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/test_wavs/ko.wav
-for w in en ja ko; do afinfo "$out/wavs/$w.wav" | grep -E 'File:|duration'; date -u +%T; afplay "$out/wavs/$w.wav" 2>&1; sleep 6; done
+for w in en ja ko; do afinfo "$out/wavs/$w.wav" | grep -E 'File:|duration'; date -u +%T; afplay "$out/wavs/$w.wav" 2>&1; sleep ${CLIP_GAP:-6}; done
 rm -rf "$out/wavs"
 shot 3-meeting-after-speech
 # Until a translation is in the session file (the model loads at the first one).
