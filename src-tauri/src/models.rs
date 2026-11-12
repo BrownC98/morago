@@ -30,6 +30,8 @@ pub struct ModelInfo {
     pub size_bytes: u64,
     /// Short user-facing note (Korean), for example "빠름, 정확도 보통".
     pub note: String,
+    /// The one meeting language (ISO 639-1) that the model knows; `None` = many.
+    pub only_language: Option<String>,
 }
 
 /// Id (folder) of the bundled Silero VAD model.
@@ -84,6 +86,7 @@ pub const ENCODER_FILE: &str = "encoder.int8.onnx";
 pub const DECODER_FILE: &str = "decoder.int8.onnx";
 pub const TOKENS_FILE: &str = "tokens.txt";
 pub const SENSE_VOICE_FILE: &str = "model.int8.onnx";
+pub const PARAKEET_FILE: &str = "model.int8.onnx";
 pub const QWEN3_FRONTEND_FILE: &str = "conv_frontend.onnx";
 /// Qwen3-ASR reads its tokenizer files from the model folder.
 pub const QWEN3_TOKENIZER_FILES: [&str; 3] = ["vocab.json", "merges.txt", "tokenizer_config.json"];
@@ -95,6 +98,7 @@ pub const WHISPER_FILE: &str = "model.bin";
 pub const SENSE_VOICE_ID: &str = "sense-voice-small";
 pub const QWEN3_ASR_ID: &str = "qwen3-asr-0.6b";
 pub const FUN_ASR_MLT_ID: &str = "fun-asr-mlt-nano";
+pub const PARAKEET_JA_ID: &str = "parakeet-tdt-ctc-0.6b-ja";
 /// Prefix of the Whisper ids ("whisper-small").
 pub const WHISPER_ID_PREFIX: &str = "whisper-";
 pub const LLM_FILE: &str = "model.gguf";
@@ -243,6 +247,35 @@ const SPECS: &[Spec] = &[
             sha256: "419d350b220d5a1d398740ec1511c8ea751517f2157043a73a399b76b60f21e4",
         }],
     },
+    // NVIDIA parakeet-tdt_ctc-0.6b-ja (CC-BY-4.0, https://huggingface.co/nvidia/parakeet-tdt_ctc-0.6b-ja),
+    // CTC head converted to ONNX int8 by k2-fsa (sherpa-onnx), pinned to one
+    // commit. Japanese only: the app uses it only with the meeting language ja
+    // (`only_language`). Error rate: all 321 sentences of FLEURS ja test, CPU,
+    // Windows host, 2026-11-12 (SenseVoice Small on the same clips: 7.5).
+    Spec {
+        id: PARAKEET_JA_ID,
+        kind: ModelKind::Asr,
+        name: "Parakeet 일본어",
+        note: "일본어 전용, CPU에서 빠름. 오류율 % 일 5.9",
+        files: &[
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8/resolve/bef18eb066808c90bd0f5df5be685767b0732de8/model.int8.onnx"
+                ),
+                name: PARAKEET_FILE,
+                size: 655_542_604,
+                sha256: "3addd00ef5bd1742078389e540b77394e4a508bdf2f4c9ad1b4a76d93e76598e",
+            },
+            FileSpec {
+                urls: hf!(
+                    "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8/resolve/bef18eb066808c90bd0f5df5be685767b0732de8/tokens.txt"
+                ),
+                name: TOKENS_FILE,
+                size: 28_557,
+                sha256: "732f64c53909f2620c713f4106b487d92e6f54a6915b3cd3d1dbd32f9f4f392a",
+            },
+        ],
+    },
     // Whisper (OpenAI, MIT) in the whisper.cpp ggml format (ggerganov/whisper.cpp,
     // MIT). The ids are those of the earlier sherpa-onnx files: settings keep
     // the model, and a new download replaces the old folder.
@@ -327,7 +360,13 @@ fn info(spec: &Spec) -> ModelInfo {
         name: spec.name.into(),
         size_bytes: spec.files.iter().map(|f| f.size).sum(),
         note: spec.note.into(),
+        only_language: only_language(spec.id).map(str::to_string),
     }
+}
+
+/// The one meeting language (ISO 639-1) of a single-language model.
+pub fn only_language(id: &str) -> Option<&'static str> {
+    (id == PARAKEET_JA_ID).then_some("ja")
 }
 
 /// Display name of a catalog model ("Gemma 4 E2B"); the id if unknown.
@@ -588,6 +627,7 @@ mod tests {
             SENSE_VOICE_ID,
             QWEN3_ASR_ID,
             FUN_ASR_MLT_ID,
+            PARAKEET_JA_ID,
             "whisper-base",
             "whisper-small",
             "whisper-medium",
@@ -633,6 +673,21 @@ mod tests {
         let pinned =
             "/Fun-ASR-MLT-Nano-2512-gguf/resolve/08f28dadd984030331802b2f9fbd9ecac97bf834/";
         assert!(fun_spec.files[0].urls.iter().all(|u| u.contains(pinned)));
+        // Parakeet: pinned to one commit; the only Japanese-only model.
+        let pk_spec = SPECS.iter().find(|s| s.id == PARAKEET_JA_ID).unwrap();
+        let pinned = "/resolve/bef18eb066808c90bd0f5df5be685767b0732de8/";
+        assert!(
+            pk_spec
+                .files
+                .iter()
+                .all(|f| f.urls.iter().all(|u| u.contains(pinned)))
+        );
+        let pk = cat.iter().find(|m| m.id == PARAKEET_JA_ID).unwrap();
+        assert_eq!(pk.size_bytes, 655_542_604 + 28_557);
+        for m in &cat {
+            let want = (m.id == PARAKEET_JA_ID).then(|| "ja".to_string());
+            assert_eq!(m.only_language, want, "{}", m.id);
+        }
     }
 
     #[test]

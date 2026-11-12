@@ -1,6 +1,7 @@
-//! Local ASR: sherpa-onnx offline recognizers (int8): SenseVoice Small and
-//! Qwen3-ASR. Each detects the language per segment, or uses the meeting
-//! language of the settings. Whisper runs on whisper.cpp (`whisper.rs`),
+//! Local ASR: sherpa-onnx offline recognizers (int8): SenseVoice Small,
+//! Qwen3-ASR and Parakeet 일본어. SenseVoice and Qwen3-ASR detect the language
+//! per segment, or use the meeting language of the settings; Parakeet knows
+//! only Japanese and runs only with the meeting language ja. Whisper runs on whisper.cpp (`whisper.rs`),
 //! Fun-ASR-MLT-Nano on transcribe.cpp (`funasr.rs`).
 //!
 //! The safe `sherpa-onnx` crate drops the detected language from the result,
@@ -95,6 +96,15 @@ fn config(model_id: &str, dir: &Path, language: Option<&str>) -> anyhow::Result<
             if let Some(code) = language {
                 stream_language = Some(text(&crate::translate::language_name(code))?);
             }
+        }
+        models::PARAKEET_JA_ID => {
+            if language != models::only_language(model_id) {
+                bail!(
+                    "Parakeet 일본어 모델은 일본어만 인식합니다. 설정에서 회의 언어를 日本語로 고르거나 다른 음성 인식 모델을 고르십시오."
+                );
+            }
+            m.nemo_ctc.model = keep(file(models::PARAKEET_FILE)?);
+            m.tokens = keep(file(models::TOKENS_FILE)?);
         }
         _ => bail!("알 수 없는 음성 인식 모델입니다: {model_id}"),
     }
@@ -281,6 +291,15 @@ mod tests {
             );
         }
         assert!(config(models::FUN_ASR_MLT_ID, dir, None).is_err());
+        let p = config(models::PARAKEET_JA_ID, dir, Some("ja")).unwrap();
+        assert!(c(p.raw.model_config.nemo_ctc.model).ends_with("model.int8.onnx"));
+        assert!(c(p.raw.model_config.tokens).ends_with("tokens.txt"));
+        assert!(p.stream_language.is_none());
+        // Japanese only: another or no meeting language is refused.
+        for language in [None, Some("ko"), Some("en")] {
+            let err = config(models::PARAKEET_JA_ID, dir, language).err().unwrap();
+            assert!(err.to_string().contains("日本語"), "{err}");
+        }
     }
 
     #[test]
@@ -300,5 +319,43 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "downloads a model and needs wav files (MORAGO_TEST_WAVS)"]
+    fn parakeet_ja_on_a_real_clip() {
+        use super::super::tests::{ensure_model, read_wav};
+        let wavs = std::path::PathBuf::from(
+            std::env::var("MORAGO_TEST_WAVS").expect("set MORAGO_TEST_WAVS to the wav folder"),
+        );
+        let models_dir = std::env::var("MORAGO_TEST_MODELS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir().join("morago-test-models"));
+        ensure_model(&models_dir, models::PARAKEET_JA_ID);
+        let mut asr = LocalAsr::new(&models_dir, models::PARAKEET_JA_ID, Some("ja")).unwrap();
+        let samples = read_wav(&wavs, "sv_ja");
+        let secs = samples.len() as f64 / SAMPLE_RATE as f64;
+        let seg = SpeechSegment {
+            source: crate::types::SourceKind::System,
+            start_ms: 0,
+            end_ms: (secs * 1000.0) as u64,
+            samples,
+        };
+        let started = std::time::Instant::now();
+        let t = asr.transcribe(&seg).unwrap();
+        let rtf = started.elapsed().as_secs_f64() / secs;
+        println!(
+            "{} sv_ja ({secs:.1} s, RTF {rtf:.2}): {}",
+            asr.label(),
+            t.text
+        );
+        assert_eq!(t.language.as_deref(), Some("ja"));
+        assert!(
+            t.text
+                .chars()
+                .any(|c| ('\u{3040}'..='\u{30FF}').contains(&c)),
+            "{}",
+            t.text
+        );
     }
 }
