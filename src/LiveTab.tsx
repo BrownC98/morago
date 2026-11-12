@@ -125,6 +125,8 @@ export function LiveTab({ active }: { active: boolean }) {
   const trDevice = device(app.gpu?.translate);
   const otherErrors = (["capture", "store", "model"] as const).filter((s) => engineErrors[s]);
   const idle = !running && utterances.length === 0;
+  // The core reads these settings when the start begins: lock them until the meeting ends.
+  const locked = running || app.starting;
 
   return (
     <div className="panel">
@@ -133,8 +135,8 @@ export function LiveTab({ active }: { active: boolean }) {
           <span className="row2" style={{ gap: 16 }}>
             <Switch
               checked={settings.capture_mic}
-              disabled={running}
-              title={running ? "회의 중에는 바꿀 수 없습니다" : undefined}
+              disabled={locked}
+              title={locked ? "회의 중에는 바꿀 수 없습니다" : undefined}
               onChange={(v) => app.updateSettings({ capture_mic: v })}
             >
               마이크
@@ -142,9 +144,9 @@ export function LiveTab({ active }: { active: boolean }) {
             </Switch>
             <Switch
               checked={sysOk && settings.capture_system}
-              disabled={running || !sysOk}
+              disabled={locked || !sysOk}
               describedBy={sysOk ? undefined : "sys-reason"}
-              title={running ? "회의 중에는 바꿀 수 없습니다" : undefined}
+              title={locked ? "회의 중에는 바꿀 수 없습니다" : undefined}
               onChange={(v) => app.updateSettings({ capture_system: v })}
             >
               시스템 소리
@@ -152,8 +154,8 @@ export function LiveTab({ active }: { active: boolean }) {
             </Switch>
             <Switch
               checked={settings.record_audio}
-              disabled={running}
-              title={running ? "회의 중에는 바꿀 수 없습니다" : "켜면 회의 소리를 기록과 함께 WAV 파일로 저장합니다"}
+              disabled={locked}
+              title={locked ? "회의 중에는 바꿀 수 없습니다" : "켜면 회의 소리를 기록과 함께 WAV 파일로 저장합니다"}
               onChange={(v) => app.updateSettings({ record_audio: v })}
             >
               녹음
