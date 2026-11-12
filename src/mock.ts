@@ -42,6 +42,7 @@ let settings: Settings = {
   live_partials: true,
   capture_mic: true,
   capture_system: true,
+  record_audio: false,
   mic_device: null,
   sessions_dir: null,
   gpu: { kind: "auto" },
@@ -381,7 +382,7 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
       );
     case "load_session": {
       const s = store.get(String(a.id));
-      return s ? delay({ meta: s.meta, utterances: s.utterances }) : Promise.reject("회의 기록을 찾을 수 없습니다.");
+      return s ? delay({ meta: s.meta, utterances: s.utterances, audio: null }) : Promise.reject("회의 기록을 찾을 수 없습니다.");
     }
     case "update_session_meta": {
       const m = a.meta as SessionMeta;
@@ -394,6 +395,8 @@ async function invoke(cmd: string, a: Record<string, unknown>): Promise<unknown>
       return delay(undefined);
     case "export_session":
       return delay(undefined, 200);
+    case "export_session_audio":
+      return Promise.reject("이 회의에는 녹음이 없습니다. 녹음은 설정에서 켠 뒤의 회의부터 저장합니다.");
     case "gpu_status":
       return delay(gpuStatus());
     case "restart_app":

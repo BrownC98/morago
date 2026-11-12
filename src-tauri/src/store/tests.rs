@@ -234,6 +234,33 @@ fn delete_removes_the_folder() {
 }
 
 #[test]
+fn a_recording_is_found_and_deleted_with_its_session() {
+    let (_d, store) = store();
+    let writer = store
+        .create(&meta(ID, "2026-11-08T14:02:12+09:00"))
+        .unwrap();
+    assert_eq!(store.audio(ID).unwrap(), None);
+    let mut recorder = store.create_audio(ID).unwrap();
+    assert!(store.create_audio(ID).is_err(), "a second recorder");
+    recorder
+        .push(&crate::types::AudioChunk {
+            source: SourceKind::Mic,
+            start_ms: 0,
+            samples: vec![0.1; 16_000],
+        })
+        .unwrap();
+    recorder.finish().unwrap();
+    writer.finish("2026-11-08T15:00:00+09:00").unwrap();
+    let path = store.audio(ID).unwrap().unwrap();
+    assert_eq!(path, store.root().join(ID).join("audio.wav"));
+    assert_eq!(hound::WavReader::open(&path).unwrap().len(), 16_000);
+    store.delete(ID).unwrap();
+    assert!(!path.exists());
+    assert!(!store.root().join(ID).exists());
+    assert!(store.audio("../x").is_err());
+}
+
+#[test]
 fn ids_are_validated_against_traversal() {
     let (d, store) = store();
     std::fs::create_dir_all(store.root()).unwrap();

@@ -47,6 +47,7 @@ pub fn run() {
             commands::update_session_meta,
             commands::delete_session,
             commands::export_session,
+            commands::export_session_audio,
             commands::gpu_status,
             commands::restart_app,
         ])

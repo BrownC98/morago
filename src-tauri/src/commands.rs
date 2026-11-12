@@ -495,12 +495,40 @@ pub fn list_sessions(state: State<'_, AppState>) -> CmdResult<Vec<SessionSummary
 pub struct LoadedSession {
     meta: SessionMeta,
     utterances: Vec<Utterance>,
+    /// Absolute path of the recording (`convertFileSrc`); `None` if the
+    /// session has none or runs now.
+    audio: Option<PathBuf>,
+}
+
+impl AppState {
+    /// The recording of a session that does not run now (its recorder still
+    /// writes the file), repaired after a crash.
+    fn session_audio(&self, id: &str) -> CmdResult<Option<PathBuf>> {
+        if self.session.lock().expect("session lock").id() == Some(id) {
+            return Ok(None);
+        }
+        self.store().audio(id).map_err(err)
+    }
 }
 
 #[tauri::command]
-pub fn load_session(state: State<'_, AppState>, id: String) -> CmdResult<LoadedSession> {
+pub fn load_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<LoadedSession> {
     let (meta, utterances) = state.store().load(&id).map_err(err)?;
-    Ok(LoadedSession { meta, utterances })
+    let audio = state.session_audio(&id)?;
+    if let Some(path) = &audio
+        && let Err(e) = app.asset_protocol_scope().allow_file(path)
+    {
+        log::warn!("session {id}: recording not allowed in the asset scope: {e}");
+    }
+    Ok(LoadedSession {
+        meta,
+        utterances,
+        audio,
+    })
 }
 
 #[tauri::command]
@@ -526,6 +554,30 @@ pub fn export_session(
     let text = state.store().export(&id, format).map_err(err)?;
     std::fs::write(&path, text)
         .map_err(|e| format!("파일을 쓰지 못했습니다({}): {e}", path.display()))
+}
+
+/// Copies the recording of a session to `path`.
+#[tauri::command]
+pub fn export_session_audio(
+    state: State<'_, AppState>,
+    id: String,
+    path: PathBuf,
+) -> CmdResult<()> {
+    if state.session.lock().expect("session lock").id() == Some(id.as_str()) {
+        return Err("진행 중이거나 저장하는 중인 회의의 녹음은 내보낼 수 없습니다.".into());
+    }
+    let audio = state
+        .session_audio(&id)?
+        .ok_or("이 회의에는 녹음이 없습니다. 녹음은 설정에서 켠 뒤의 회의부터 저장합니다.")?;
+    // A copy onto itself would empty the recording.
+    if std::fs::canonicalize(&path)
+        .is_ok_and(|p| std::fs::canonicalize(&audio).is_ok_and(|a| a == p))
+    {
+        return Ok(());
+    }
+    std::fs::copy(&audio, &path)
+        .map(|_| ())
+        .map_err(|e| format!("녹음 파일을 쓰지 못했습니다({}): {e}", path.display()))
 }
 
 #[cfg(test)]

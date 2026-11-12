@@ -1,10 +1,14 @@
 //! Session storage and export. Owner: secrets/storage worker (high risk).
-//! Layout: `<sessions_dir>/<id>/meta.json` + `utterances.jsonl`.
+//! Layout: `<sessions_dir>/<id>/meta.json` + `utterances.jsonl`, and
+//! `audio.wav` if the meeting was recorded (`audio.rs`).
 //! `utterances.jsonl` is append-only; a later line with the same `id`
 //! replaces the earlier one (translation updates), so a crash loses at most
 //! the last line. Contract (do not change signatures without the coordinator).
 
+pub(crate) mod audio;
 mod export;
+
+pub use audio::AudioRecorder;
 
 use crate::types::{ExportFormat, SessionMeta, SessionSummary, Utterance};
 use anyhow::Context;
@@ -156,6 +160,25 @@ impl SessionStore {
             Err(e) => return Err(e).context("발화 기록 파일을 읽을 수 없습니다"),
         };
         Ok((meta, parse_utterances(id, &bytes)))
+    }
+    /// Starts the recording `audio.wav` of a session that `create` made.
+    pub fn create_audio(&self, id: &str) -> anyhow::Result<AudioRecorder> {
+        let path = self.dir(id)?.join(audio::AUDIO);
+        AudioRecorder::create(&path).context("녹음 파일을 만들 수 없습니다")
+    }
+    /// The recording of a session that does not run now, repaired after a
+    /// crash (`audio::repair`); `None` if the session has none.
+    pub fn audio(&self, id: &str) -> anyhow::Result<Option<PathBuf>> {
+        let path = self.dir(id)?.join(audio::AUDIO);
+        match audio::repair(&path) {
+            Ok(true) => Ok(Some(path)),
+            Ok(false) => Ok(None),
+            // For example a read-only folder: the file can still play.
+            Err(e) => {
+                log::warn!("session {id}: could not repair the recording: {e}");
+                Ok(path.exists().then_some(path))
+            }
+        }
     }
     /// Changes title and speaker names in meta.json.
     pub fn update_meta(&self, meta: &SessionMeta) -> anyhow::Result<()> {

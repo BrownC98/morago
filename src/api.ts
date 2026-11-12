@@ -104,6 +104,8 @@ export interface Settings {
   live_partials: boolean;
   capture_mic: boolean;
   capture_system: boolean;
+  /** Save the meeting audio (`audio.wav`) with the session; default off; read at session start. */
+  record_audio: boolean;
   mic_device: string | null;
   sessions_dir: string | null;
   gpu: GpuSetting;
@@ -242,12 +244,18 @@ export const api = {
   startSession: (title: string | null) => call<SessionMeta>("start_session", { title }),
   stopSession: () => call<SessionSummary>("stop_session"),
   listSessions: () => call<SessionSummary[]>("list_sessions"),
+  /** `audio`: absolute path of the recording for `convertFileSrc`; null if none or the session runs. */
   loadSession: (id: string) =>
-    call<{ meta: SessionMeta; utterances: Utterance[] }>("load_session", { id }),
+    call<{ meta: SessionMeta; utterances: Utterance[]; audio: string | null }>("load_session", {
+      id,
+    }),
   updateSessionMeta: (meta: SessionMeta) => call<void>("update_session_meta", { meta }),
   deleteSession: (id: string) => call<void>("delete_session", { id }),
   exportSession: (id: string, format: ExportFormat, path: string) =>
     call<void>("export_session", { id, format, path }),
+  /** Copies the recording (WAV) to `path`; rejects if the session has none. */
+  exportSessionAudio: (id: string, path: string) =>
+    call<void>("export_session_audio", { id, path }),
   gpuStatus: () => call<GpuStatus>("gpu_status"),
   restartApp: () => call<void>("restart_app"),
 };
