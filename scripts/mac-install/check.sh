@@ -257,6 +257,9 @@ echo "== end"
 } | tee "$out/probes.txt"
 pkill -x morago; sleep 2
 [ -z "$(crashes)" ] && res crash-reports pass "no crash report of morago" || { res crash-reports fail "$(crashes)"; cp ~/Library/Logs/DiagnosticReports/*orago* "$out/" 2>/dev/null; }
+# Runs 43190180879 and 43197148234: the virtual GPU of the runner timed out
+# under the translation model; after it the screen can stay white.
+grep -q kIOGPUCommandBufferCallbackErrorTimeout "$out/app.log" && res runner-gpu info "the runner's virtual GPU timed out: run the job again"
 grep -vE '^ggml_metal_library_compile_all' "$out/app.log" | tail -150
 cat "$out/results.tsv"
 rm -f "$out/ax"
